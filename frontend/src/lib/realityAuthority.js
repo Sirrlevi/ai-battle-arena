@@ -7,7 +7,6 @@ export function interpretRealityClaim(action = {}, mode = AUTHORITY_MODES.ENGINE
   const scale = /infinite|omniversal|universe|cosmic|god/.test(text) ? "Cosmic" : /massive|ultimate|final|colossal/.test(text) ? "Extreme" : "Standard";
   return { authorityMode: mode, translatedType: type, element, scale, intensity: scale === "Cosmic" ? "Extreme" : action.energy_cost >= 30 ? "High" : "Moderate", specialEffects: [type !== "Attack" ? type : null, element !== "Kinetic" ? `${element} aura` : null, scale === "Cosmic" ? "Reality crack" : null].filter(Boolean), rendererHints: { effect: element.toLowerCase(), magnitude: scale }, antiBoringGuidance: mode !== AUTHORITY_MODES.ENGINE ? "Escalate creatively while preserving counterplay; avoid instant-win closure." : "Engine rules are authoritative." };
 }
-
 export function applyAuthority(mode, engineResolver, round, attacker, defender, action) {
   const interpreterOutput = interpretRealityClaim(action, mode);
   const aiDecision = { claimedResult: action?.expected_result || "intent only", action };

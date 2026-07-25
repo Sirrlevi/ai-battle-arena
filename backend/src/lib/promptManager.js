@@ -11,7 +11,6 @@ export function characterPrompt(customPrompt) {
       : `Invent an original fighter with a distinctive power set.`,
   };
 }
-
 function authorityGuidance(mode) {
   if (mode === "ai") {
     return `Authority Mode: AI AUTHORITY / Free Reality. You may author damage, healing, immortality, adaptation, transformations, new concepts, resurrection, and reality warping. The engine will display rather than reject claims. Anti-boring rule: do not instantly end the battle; escalate creatively and leave room for counterplay.`;
@@ -21,7 +20,6 @@ function authorityGuidance(mode) {
   }
   return `Authority Mode: ENGINE AUTHORITY. You choose intent only. The battle engine controls HP, damage, healing, energy, cooldowns, status effects, movement validation, death, victory, power scaling, and game rules.`;
 }
-
 export function turnSystemPrompt(fighterName, combatStyle, personality, customPrompt, authorityMode = "engine") {
   return (
     `You are ${fighterName}, a combatant in a turn-based fictional battle arena. ` +
@@ -35,7 +33,6 @@ export function turnSystemPrompt(fighterName, combatStyle, personality, customPr
     (customPrompt?.trim() ? ` Additional direction: ${customPrompt.trim()}` : "")
   );
 }
-
 export function turnUserPrompt(round, self, enemy, recentHistory, promptContext = {}) {
   return JSON.stringify({
     round,
