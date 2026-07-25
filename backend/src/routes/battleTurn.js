@@ -10,7 +10,7 @@ export const battleTurnRouter = Router();
 
 battleTurnRouter.post("/battle-turn", requireSession, async (req, res, next) => {
   try {
-    const { fighter, round, self, enemy, recentHistory, customPrompt } = req.body || {};
+    const { fighter, round, self, enemy, recentHistory, customPrompt, promptContext } = req.body || {};
     if (fighter !== "A" && fighter !== "B") {
       throw new AppError('fighter must be "A" or "B".', { code: "VALIDATION_ERROR", status: 400 });
     }
@@ -26,8 +26,9 @@ battleTurnRouter.post("/battle-turn", requireSession, async (req, res, next) => 
       });
     }
 
-    const system = turnSystemPrompt(self.name, self.combatStyle || self.combat_style || "unspecified", self.personality || "unspecified", customPrompt);
-    const user = turnUserPrompt(round || 1, self, enemy, recentHistory);
+    const authorityMode = promptContext?.authorityMode || "engine";
+    const system = turnSystemPrompt(self.name, self.combatStyle || self.combat_style || "unspecified", self.personality || "unspecified", customPrompt, authorityMode);
+    const user = turnUserPrompt(round || 1, self, enemy, recentHistory, promptContext);
 
     const raw = await callModel({
       provider: config.provider,

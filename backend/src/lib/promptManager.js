@@ -12,14 +12,23 @@ export function characterPrompt(customPrompt) {
   };
 }
 
-export function turnSystemPrompt(fighterName, combatStyle, personality, customPrompt) {
+function authorityGuidance(mode) {
+  if (mode === "ai") {
+    return `Authority Mode: AI AUTHORITY / Free Reality. You may author damage, healing, immortality, adaptation, transformations, new concepts, resurrection, and reality warping. The engine will display rather than reject claims. Anti-boring rule: do not instantly end the battle; escalate creatively and leave room for counterplay.`;
+  }
+  if (mode === "hybrid") {
+    return `Authority Mode: HYBRID. You have narrative authority; the engine has gameplay authority. Make imaginative claims freely; they will be interpreted into structured combat events, damage, status, and renderer hints.`;
+  }
+  return `Authority Mode: ENGINE AUTHORITY. You choose intent only. The battle engine controls HP, damage, healing, energy, cooldowns, status effects, movement validation, death, victory, power scaling, and game rules.`;
+}
+
+export function turnSystemPrompt(fighterName, combatStyle, personality, customPrompt, authorityMode = "engine") {
   return (
     `You are ${fighterName}, a combatant in a turn-based fictional battle arena. ` +
-    `Combat style: ${combatStyle}. Personality: ${personality}. ` +
-    `You NEVER decide the outcome of your action — you only declare INTENT. A separate battle engine ` +
-    `determines hit/miss, damage, cooldowns, status effects, and death, and it always overrides your claims. ` +
-    `Never say you automatically win or automatically kill the opponent. Every ability should imply a cost, a weakness, ` +
-    `and should not be reused every single turn — prefer creativity over repetition. ` +
+    `Combat style: ${combatStyle}. Personality: ${personality}. Stay in character and adapt to memory. ` +
+    `${authorityGuidance(authorityMode)} ` +
+    `Before acting, observe memory, analyze opponent patterns, predict the opponent, select a strategy, then generate one action. ` +
+    `Never be random. Avoid repeating failed strategies or spamming the same power. ` +
     `Respond with ONLY a JSON object, no prose, no markdown fences. Schema: ` +
     `{"thought":string,"action":"Attack"|"Defend"|"Special","ability_name":string,"description":string,"target":"Enemy",` +
     `"energy_cost":number (0-40),"expected_result":string}.` +
@@ -27,12 +36,24 @@ export function turnSystemPrompt(fighterName, combatStyle, personality, customPr
   );
 }
 
-export function turnUserPrompt(round, self, enemy, recentHistory) {
+export function turnUserPrompt(round, self, enemy, recentHistory, promptContext = {}) {
   return JSON.stringify({
     round,
-    you: { name: self.name, hp: self.hp, energy: self.energy, status: self.status || [] },
+    you: { name: self.name, hp: self.hp, energy: self.energy, status: self.status || [], current_form: promptContext?.transformationMemory?.currentForm },
     enemy: { name: enemy.name, hp: enemy.hp, energy: enemy.energy, status: enemy.status || [] },
-    recent_history: recentHistory || "Battle just began.",
-    instruction: "Decide your action for this turn as the JSON schema described.",
+    memory_payload: {
+      self_state: promptContext?.selfMemory || null,
+      opponent_profile: promptContext?.opponentMemory || null,
+      arena_state: promptContext?.arenaMemory || null,
+      current_goal: promptContext?.strategyMemory?.objective || null,
+      personality: promptContext?.personalityMemory || self.personality || null,
+      recent_turns: promptContext?.recentTurns || recentHistory || "Battle just began.",
+      long_term_summary: promptContext?.longTermSummary || "No compressed memory yet.",
+      authority_mode: promptContext?.authorityMode || "engine",
+      current_strategy: promptContext?.strategyMemory || null,
+      known_powers: promptContext?.powerMemory || {},
+      transformations: promptContext?.transformationMemory || {},
+    },
+    instruction: "Use only this compressed context. Pick an adaptive, in-character action as JSON.",
   });
 }
