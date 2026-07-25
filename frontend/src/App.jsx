@@ -1,8 +1,13 @@
 import { useState, useRef, useEffect } from "react";
 import { Swords, Play, Pause, RotateCcw, AlertTriangle, Loader2 } from "lucide-react";
 import { createSession, setSessionKeys, generateCharacter as apiGenerateCharacter, battleTurn as apiBattleTurn, waitForBackend, API_BASE, ApiError } from "./api.js";
-import { createFighter, resetFighterCombatState, computeSpawnPositions } from "./lib/battleState.js";
+import { createFighter, resetFighterCombatState, computeSpawnPositions, ARENA_WIDTH, GROUND_Y } from "./lib/battleState.js";
 import { resolveAction, tickStatus } from "./lib/battleEngine.js";
+import { interpretAction } from "./lib/actionInterpreter.js";
+import { createAnimState, queueAction, updateAnimation, applyHitReaction } from "./lib/animationController.js";
+import { createProjectileManager, spawnProjectile, updateProjectiles } from "./lib/projectileManager.js";
+import { createCamera, updateCamera } from "./lib/cameraController.js";
+import { useAnimationFrame } from "./hooks/useAnimationFrame.js";
 import Arena from "./components/Arena.jsx";
 import HUD from "./components/HUD.jsx";
 import CharacterCard from "./components/CharacterCard.jsx";
@@ -25,6 +30,10 @@ const PROVIDERS = [
   { id: "deepseek", label: "DeepSeek", defaultModel: "deepseek-chat" },
   { id: "openrouter", label: "OpenRouter", defaultModel: "meta-llama/llama-3.1-8b-instruct" },
 ];
+
+const MOTION_BOUNDS = { minX: 40, maxX: ARENA_WIDTH - 40 };
+const TORSO_OFFSET_Y = -80; // where projectiles launch from / aim at, relative to a fighter's feet
+let dmgNumberId = 1;
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -89,7 +98,7 @@ function FighterSetup({ fighter, onChange, disabled }) {
 }
 
 // Roster is a plain array so the renderer/engine already work for any N —
-// Phase 2 just seeds it with two fighters via the setup screen.
+// Phase 2/3 just seed it with two fighters via the setup screen.
 const ROSTER_KEYS = ["A", "B"];
 
 function makeInitialRoster() {
@@ -97,6 +106,16 @@ function makeInitialRoster() {
   return ROSTER_KEYS.map((key, index) =>
     createFighter({ key, index, total: ROSTER_KEYS.length, provider: "openai", model: "gpt-4o-mini", apiKey: "", customPrompt: "", position: positions[index] })
   );
+}
+
+function makeAnimMap(roster) {
+  const map = {};
+  for (const f of roster) {
+    const anim = createAnimState(f.position.x, GROUND_Y, GROUND_Y);
+    anim.key = f.key;
+    map[f.key] = anim;
+  }
+  return map;
 }
 
 export default function App() {
@@ -111,9 +130,14 @@ export default function App() {
   const [sessionId, setSessionId] = useState(null);
   const [backendOk, setBackendOk] = useState(null); // null = checking, true/false once known
   const [wakeAttempt, setWakeAttempt] = useState(0);
+  const [damageNumbers, setDamageNumbers] = useState([]);
+  const [, setRenderTick] = useState(0); // forces a re-render every animation frame
 
   const runRef = useRef({ stop: false, pause: false });
   const stateRef = useRef(roster);
+  const animRef = useRef(makeAnimMap(roster));
+  const projectileManagerRef = useRef(createProjectileManager());
+  const cameraRef = useRef(createCamera(ARENA_WIDTH / 2));
 
   // Wake the backend (tolerating Render free-tier cold starts) and then
   // establish a session, as soon as the app loads.
@@ -140,6 +164,65 @@ export default function App() {
     connect();
     return () => { cancelled = true; };
   }, []);
+
+  function pushDamageNumber(x, y, damage, color) {
+    const id = dmgNumberId++;
+    setDamageNumbers((prev) => [...prev, { id, x, y, text: `-${damage}`, color }]);
+    setTimeout(() => setDamageNumbers((prev) => prev.filter((d) => d.id !== id)), 950);
+  }
+
+  function handleImpact(actorAnim, targetKey, impact) {
+    const targetAnim = animRef.current[targetKey];
+    if (!targetAnim) return;
+
+    if (impact.spawnProjectile) {
+      spawnProjectile(projectileManagerRef.current, {
+        variant: impact.projectileVariant,
+        fromX: actorAnim.motion.x,
+        fromY: actorAnim.motion.y + TORSO_OFFSET_Y,
+        toX: targetAnim.motion.x,
+        toY: targetAnim.motion.y + TORSO_OFFSET_Y,
+        ownerKey: actorAnim.key,
+        targetKey,
+        payload: { damage: impact.damage, result: impact.result },
+      });
+      return;
+    }
+
+    if (impact.result === "hit" || impact.result === "lethal") {
+      applyHitReaction(targetAnim, actorAnim.motion.x);
+      pushDamageNumber(targetAnim.motion.x, targetAnim.motion.y + TORSO_OFFSET_Y, impact.damage, HIT);
+    }
+  }
+
+  // ---------- The Phase 3 game loop: runs independently of the turn-based
+  // backend calls, so movement stays smooth while an AI is "thinking". ----------
+  useAnimationFrame((dt) => {
+    if (phase === "setup" || phase === "paused") return;
+
+    const currentRoster = stateRef.current;
+    for (const f of currentRoster) {
+      const anim = animRef.current[f.key];
+      if (!anim) continue;
+      const { impact, state } = updateAnimation(anim, dt, MOTION_BOUNDS, anim.homeX, f.alive);
+      anim.state = state;
+      if (impact) handleImpact(anim, impact.targetKey, impact);
+    }
+
+    updateProjectiles(projectileManagerRef.current, dt, (p) => {
+      if (p.payload?.result === "hit" || p.payload?.result === "lethal") {
+        const targetAnim = animRef.current[p.targetKey];
+        if (targetAnim) {
+          applyHitReaction(targetAnim, p.fromX);
+          pushDamageNumber(p.toX, p.toY, p.payload.damage, HIT);
+        }
+      }
+    });
+
+    updateCamera(cameraRef.current, currentRoster.map((f) => ({ alive: f.alive, motion: animRef.current[f.key]?.motion })), ARENA_WIDTH, dt);
+
+    setRenderTick((t) => t + 1);
+  }, true);
 
   function updateFighter(key, val) {
     setRoster((prev) => prev.map((f) => (f.key === key ? val : f)));
@@ -169,6 +252,7 @@ export default function App() {
     setRound(1);
     setWinnerKey(null);
     setLastEntry(null);
+    setDamageNumbers([]);
     setPhase("generating");
 
     try {
@@ -196,6 +280,12 @@ export default function App() {
     const newRoster = results.map((r) => r.value);
     setRoster(newRoster);
     stateRef.current = newRoster.map((f) => ({ ...f, status: [...f.status], cooldowns: { ...f.cooldowns } }));
+
+    // Fresh animation/projectile/camera state for the new fight.
+    animRef.current = makeAnimMap(newRoster);
+    projectileManagerRef.current = createProjectileManager();
+    cameraRef.current = createCamera(ARENA_WIDTH / 2);
+
     setLog(newRoster.map((f) => ({ system: true, text: `${f.name} enters the arena — "${f.intro}"` })));
     runRef.current = { stop: false, pause: false };
     setPhase("battle");
@@ -213,7 +303,7 @@ export default function App() {
 
       const st = stateRef.current;
       const attacker = st[turn];
-      const defender = st[1 - turn]; // two-fighter roster for Phase 2; N-fighter targeting is a Phase 3+ concern
+      const defender = st[1 - turn]; // two-fighter roster for now; N-fighter targeting is a later concern
 
       setThinkingKey(attacker.key);
       let action = null;
@@ -245,6 +335,16 @@ export default function App() {
       setLog((prev) => [...prev, entry]);
       setLastEntry(entry);
 
+      // Hand the resolved outcome to the animation layer: it decides HOW to
+      // show it (melee dash-in, projectile flight, block pose, ...) while
+      // the actual hp/energy numbers above are already final.
+      const attackerAnim = animRef.current[attacker.key];
+      const defenderAnim = animRef.current[defender.key];
+      if (attackerAnim && defenderAnim) {
+        const intent = interpretAction(entry);
+        queueAction(attackerAnim, intent, defenderAnim, entry);
+      }
+
       if (!defender.alive) {
         setWinnerKey(attacker.key);
         setPhase("finished");
@@ -270,9 +370,15 @@ export default function App() {
     setRound(1);
     setWinnerKey(null);
     setLastEntry(null);
+    setDamageNumbers([]);
     setRoster((prev) => {
       const positions = computeSpawnPositions(prev.length);
-      return prev.map((f, i) => createFighter({ key: f.key, index: i, total: prev.length, provider: f.provider, model: f.model, apiKey: f.apiKey, customPrompt: f.customPrompt, position: positions[i] }));
+      const next = prev.map((f, i) => createFighter({ key: f.key, index: i, total: prev.length, provider: f.provider, model: f.model, apiKey: f.apiKey, customPrompt: f.customPrompt, position: positions[i] }));
+      stateRef.current = next;
+      animRef.current = makeAnimMap(next);
+      projectileManagerRef.current = createProjectileManager();
+      cameraRef.current = createCamera(ARENA_WIDTH / 2);
+      return next;
     });
   }
 
@@ -281,6 +387,18 @@ export default function App() {
   const winnerFighter = winnerKey ? fighterByKey(roster, winnerKey) : null;
   const fighterColors = Object.fromEntries(roster.map((f) => [f.key, f.color]));
   const activeEffects = lastEntry?.effect ? { [lastEntry.actorKey]: lastEntry.effect } : {};
+
+  const poses = Object.fromEntries(
+    roster.map((f) => {
+      const anim = animRef.current[f.key];
+      return [
+        f.key,
+        anim
+          ? { x: anim.motion.x, y: anim.motion.y, facing: anim.motion.facing, state: anim.state, attackPhase: anim.attackPhase, flashing: anim.flashTimer > 0 }
+          : { x: f.position.x, y: f.position.y, facing: 1, state: "idle", attackPhase: null, flashing: false },
+      ];
+    })
+  );
 
   return (
     <div className="min-h-screen w-full" style={{ background: VOID, color: INK, fontFamily: "'Space Grotesk', system-ui, sans-serif" }}>
@@ -359,7 +477,14 @@ export default function App() {
             </div>
 
             <div className="mb-4">
-              <Arena fighters={roster} activeActorKey={thinkingKey} activeEffects={activeEffects} />
+              <Arena
+                fighters={roster}
+                poses={poses}
+                activeEffects={activeEffects}
+                camera={cameraRef.current}
+                projectiles={projectileManagerRef.current.items}
+                damageNumbers={damageNumbers}
+              />
             </div>
 
             <div className="grid md:grid-cols-2 gap-4 mb-4">
