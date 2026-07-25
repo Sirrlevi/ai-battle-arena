@@ -26,7 +26,7 @@ battleTurnRouter.post("/battle-turn", requireSession, async (req, res, next) => 
       });
     }
 
-    const system = turnSystemPrompt(self.name, self.combat_style || "unspecified", self.personality || "unspecified", customPrompt);
+    const system = turnSystemPrompt(self.name, self.combatStyle || self.combat_style || "unspecified", self.personality || "unspecified", customPrompt);
     const user = turnUserPrompt(round || 1, self, enemy, recentHistory);
 
     const raw = await callModel({

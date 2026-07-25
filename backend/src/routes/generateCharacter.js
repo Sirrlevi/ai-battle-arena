@@ -47,13 +47,15 @@ generateCharacterRouter.post("/generate-character", requireSession, async (req, 
       });
     }
 
+    const FALLBACK_COLOR = { A: "#7C6BFF", B: "#FF7A45" };
     const character = {
       name: parsed.name || `Fighter ${fighter}`,
-      color: parsed.color || "",
-      appearance: parsed.appearance || "",
-      combat_style: parsed.combat_style || "",
+      color: /^#([0-9a-f]{3}){1,2}$/i.test(parsed.color || "") ? parsed.color : FALLBACK_COLOR[fighter],
+      aura: parsed.aura || "",
+      weapon: parsed.weapon || "",
+      combatStyle: parsed.combatStyle || parsed.combat_style || "",
       personality: parsed.personality || "",
-      introduction: parsed.introduction || "",
+      intro: parsed.intro || parsed.introduction || "",
     };
 
     logger.info("generate-character:success", { sessionId: req.sessionId, fighter, provider: config.provider, name: character.name });

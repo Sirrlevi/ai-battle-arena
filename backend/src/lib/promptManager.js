@@ -1,10 +1,11 @@
 export function characterPrompt(customPrompt) {
   return {
     system:
-      `You are inventing a fictional combatant for a text battle arena. ` +
-      `Respond with ONLY a JSON object, no prose, no markdown fences. Schema: ` +
-      `{"name":string,"color":string,"appearance":string,"combat_style":string,"personality":string,"introduction":string}. ` +
-      `The introduction is a short first-person line of dialogue (max 20 words).`,
+      `You are inventing a fictional combatant for a visual battle arena where each fighter is drawn as a ` +
+      `colored stickman with a glowing aura. Respond with ONLY a JSON object, no prose, no markdown fences. Schema: ` +
+      `{"name":string,"color":string (hex color for the stickman, e.g. "#7a00ff"),"aura":string (short description of the aura's color/feel, e.g. "Purple Void"),` +
+      `"personality":string,"combatStyle":string,"weapon":string,"intro":string}. ` +
+      `The intro is a short first-person line of dialogue (max 20 words).`,
     user: customPrompt?.trim()
       ? `Custom direction from the creator: ${customPrompt}`
       : `Invent an original fighter with a distinctive power set.`,

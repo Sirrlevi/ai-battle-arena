@@ -1,15 +1,19 @@
 import { useState, useRef, useEffect } from "react";
-import { Swords, Zap, Heart, Play, Pause, RotateCcw, Skull, Trophy, ShieldCheck, AlertTriangle, Loader2 } from "lucide-react";
+import { Swords, Play, Pause, RotateCcw, AlertTriangle, Loader2 } from "lucide-react";
 import { createSession, setSessionKeys, generateCharacter as apiGenerateCharacter, battleTurn as apiBattleTurn, waitForBackend, API_BASE, ApiError } from "./api.js";
+import { createFighter, resetFighterCombatState, computeSpawnPositions } from "./lib/battleState.js";
+import { resolveAction, tickStatus } from "./lib/battleEngine.js";
+import Arena from "./components/Arena.jsx";
+import HUD from "./components/HUD.jsx";
+import CharacterCard from "./components/CharacterCard.jsx";
+import BattleLog from "./components/BattleLog.jsx";
 
 const INK = "#EDEAE3";
 const VOID = "#0A0C0F";
 const PANEL = "#12151A";
 const LINE = "#23282f";
 const DIM = "#7C8590";
-const FIGHTER_COLORS = { A: "#7C6BFF", B: "#FF7A45" };
 const HIT = "#E4443B";
-const OK = "#3ECF8E";
 const GOLD = "#E8B94A";
 
 const PROVIDERS = [
@@ -29,91 +33,15 @@ function logError(tag, info) {
   console.error(`[BattleArena] ✕ ${tag}`, info);
 }
 
-// ---------- BATTLE ENGINE (deterministic, client-side, unchanged by the backend migration) ----------
-function resolveAction(round, attacker, defender, action) {
-  const entry = {
-    round,
-    actorKey: attacker.key,
-    actorName: attacker.name,
-    thought: action?.thought || "",
-    action: action?.action || "Attack",
-    ability_name: action?.ability_name || "Strike",
-    description: action?.description || "",
-    result: "hit",
-    damage: 0,
-    engineNote: "",
-  };
-
-  const round_available = attacker.cooldowns[entry.ability_name] || 0;
-  if (round_available > round) {
-    entry.result = "on_cooldown";
-    entry.engineNote = `${entry.ability_name} is still on cooldown (ready round ${round_available}). Engine substitutes a basic strike.`;
-    entry.ability_name = "Basic Strike";
-  }
-
-  let cost = Math.max(0, Math.min(Number(action?.energy_cost) || 12, 40));
-  if (cost > attacker.energy) {
-    entry.engineNote += ` Insufficient energy for full technique — engine caps output.`;
-    cost = attacker.energy;
-  }
-  attacker.energy = Math.max(0, attacker.energy - cost);
-  attacker.cooldowns[entry.ability_name] = round + 2;
-
-  if (entry.action === "Defend") {
-    attacker.status.push({ type: "guarding", rounds: 1 });
-    entry.result = "defend";
-    return entry;
-  }
-
-  const dodgeChance = 0.16 + (defender.status.some((s) => s.type === "slowed") ? -0.08 : 0);
-  if (Math.random() < dodgeChance) {
-    entry.result = "miss";
-    return entry;
-  }
-
-  let dmg = Math.round(6 + cost * 0.85 + Math.random() * 9);
-  if (defender.status.some((s) => s.type === "guarding")) dmg = Math.round(dmg * 0.35);
-  if (entry.action === "Special") dmg = Math.round(dmg * 1.15);
-
-  defender.hp = Math.max(0, defender.hp - dmg);
-  entry.damage = dmg;
-  entry.result = defender.hp === 0 ? "lethal" : "hit";
-  return entry;
-}
-
-function tickStatus(fighter) {
-  fighter.status = fighter.status
-    .map((s) => ({ ...s, rounds: s.rounds - 1 }))
-    .filter((s) => s.rounds > 0);
-  fighter.energy = Math.min(100, fighter.energy + 12);
-}
-
-// ---------- UI PRIMITIVES ----------
-function Bar({ value, max = 100, color, icon }) {
-  return (
-    <div className="flex items-center gap-2">
-      {icon}
-      <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: LINE }}>
-        <div
-          className="h-full rounded-full transition-all duration-500"
-          style={{ width: `${Math.max(0, (value / max) * 100)}%`, background: color }}
-        />
-      </div>
-      <span className="text-xs w-8 text-right tabular-nums" style={{ color: DIM, fontFamily: "'IBM Plex Mono', monospace" }}>
-        {value}
-      </span>
-    </div>
-  );
-}
-
-function FighterSetup({ fighter, onChange, disabled, colorKey }) {
+// ---------- UI: fighter setup form (Phase 1, unchanged behavior) ----------
+function FighterSetup({ fighter, onChange, disabled }) {
   const p = PROVIDERS.find((x) => x.id === fighter.provider);
   return (
     <div className="rounded-lg p-4 space-y-3" style={{ background: PANEL, border: `1px solid ${LINE}` }}>
       <div className="flex items-center gap-2">
-        <div className="w-2 h-2 rounded-full" style={{ background: FIGHTER_COLORS[colorKey] }} />
-        <span className="text-xs uppercase tracking-widest" style={{ color: FIGHTER_COLORS[colorKey], fontFamily: "'IBM Plex Mono', monospace" }}>
-          Fighter {colorKey}
+        <div className="w-2 h-2 rounded-full" style={{ background: fighter.color }} />
+        <span className="text-xs uppercase tracking-widest" style={{ color: fighter.color, fontFamily: "'IBM Plex Mono', monospace" }}>
+          Fighter {fighter.key}
         </span>
       </div>
       <select
@@ -160,42 +88,32 @@ function FighterSetup({ fighter, onChange, disabled, colorKey }) {
   );
 }
 
-const initialFighter = (key) => ({
-  key,
-  provider: "openai",
-  model: "gpt-4o-mini",
-  apiKey: "",
-  customPrompt: "",
-  name: key === "A" ? "Fighter A" : "Fighter B",
-  color: FIGHTER_COLORS[key],
-  appearance: "",
-  combat_style: "",
-  personality: "",
-  introduction: "",
-  hp: 100,
-  energy: 100,
-  status: [],
-  cooldowns: {},
-});
+// Roster is a plain array so the renderer/engine already work for any N —
+// Phase 2 just seeds it with two fighters via the setup screen.
+const ROSTER_KEYS = ["A", "B"];
+
+function makeInitialRoster() {
+  const positions = computeSpawnPositions(ROSTER_KEYS.length);
+  return ROSTER_KEYS.map((key, index) =>
+    createFighter({ key, index, total: ROSTER_KEYS.length, provider: "openai", model: "gpt-4o-mini", apiKey: "", customPrompt: "", position: positions[index] })
+  );
+}
 
 export default function App() {
-  const [fighterA, setFighterA] = useState(initialFighter("A"));
-  const [fighterB, setFighterB] = useState(initialFighter("B"));
+  const [roster, setRoster] = useState(makeInitialRoster);
   const [phase, setPhase] = useState("setup"); // setup | generating | battle | paused | finished
   const [log, setLog] = useState([]);
   const [round, setRound] = useState(1);
   const [errorMsg, setErrorMsg] = useState("");
-  const [winner, setWinner] = useState(null);
-  const [thinking, setThinking] = useState(null);
+  const [winnerKey, setWinnerKey] = useState(null);
+  const [thinkingKey, setThinkingKey] = useState(null);
+  const [lastEntry, setLastEntry] = useState(null);
   const [sessionId, setSessionId] = useState(null);
   const [backendOk, setBackendOk] = useState(null); // null = checking, true/false once known
   const [wakeAttempt, setWakeAttempt] = useState(0);
 
   const runRef = useRef({ stop: false, pause: false });
-  const stateRef = useRef({ a: fighterA, b: fighterB });
-  const logEndRef = useRef(null);
-
-  useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [log]);
+  const stateRef = useRef(roster);
 
   // Wake the backend (tolerating Render free-tier cold starts) and then
   // establish a session, as soon as the app loads.
@@ -224,24 +142,16 @@ export default function App() {
   }, []);
 
   function updateFighter(key, val) {
-    if (key === "A") setFighterA(val); else setFighterB(val);
+    setRoster((prev) => prev.map((f) => (f.key === key ? val : f)));
   }
 
-  async function generateCharacter(sid, fighter, key) {
-    const character = await apiGenerateCharacter(sid, key, fighter.customPrompt);
-    return {
-      ...fighter,
-      name: character.name || fighter.name,
-      color: character.color || fighter.color,
-      appearance: character.appearance || "",
-      combat_style: character.combat_style || "",
-      personality: character.personality || "",
-      introduction: character.introduction || "",
-      hp: 100,
-      energy: 100,
-      status: [],
-      cooldowns: {},
-    };
+  function fighterByKey(list, key) {
+    return list.find((f) => f.key === key);
+  }
+
+  async function generateCharacterFor(sid, fighter) {
+    const character = await apiGenerateCharacter(sid, fighter.key, fighter.customPrompt);
+    return resetFighterCombatState({ ...fighter, ...character });
   }
 
   async function startBattle() {
@@ -249,6 +159,7 @@ export default function App() {
       setErrorMsg(backendOk === false ? "Backend is unreachable — can't start a battle." : "Still connecting to the backend — try again in a moment.");
       return;
     }
+    const [fighterA, fighterB] = roster;
     if (!fighterA.apiKey || !fighterB.apiKey) {
       setErrorMsg("Both fighters need an API key before the battle can start.");
       return;
@@ -256,7 +167,8 @@ export default function App() {
     setErrorMsg("");
     setLog([]);
     setRound(1);
-    setWinner(null);
+    setWinnerKey(null);
+    setLastEntry(null);
     setPhase("generating");
 
     try {
@@ -268,39 +180,30 @@ export default function App() {
       return;
     }
 
-    const [resA, resB] = await Promise.allSettled([
-      generateCharacter(sessionId, fighterA, "A"),
-      generateCharacter(sessionId, fighterB, "B"),
-    ]);
+    const results = await Promise.allSettled(roster.map((f) => generateCharacterFor(sessionId, f)));
+    const rejected = results.filter((r) => r.status === "rejected");
+    results.forEach((r, i) => { if (r.status === "rejected") logError(`startBattle:fighter${roster[i].key}`, r.reason); });
 
-    if (resA.status === "rejected") logError("startBattle:fighterA", resA.reason);
-    if (resB.status === "rejected") logError("startBattle:fighterB", resB.reason);
-
-    if (resA.status === "rejected" || resB.status === "rejected") {
-      const lines = [];
-      if (resA.status === "rejected") lines.push(`Fighter A — ${resA.reason?.message || String(resA.reason)}`);
-      if (resB.status === "rejected") lines.push(`Fighter B — ${resB.reason?.message || String(resB.reason)}`);
+    if (rejected.length > 0) {
+      const lines = results
+        .map((r, i) => (r.status === "rejected" ? `Fighter ${roster[i].key} — ${r.reason?.message || String(r.reason)}` : null))
+        .filter(Boolean);
       setErrorMsg(lines.join("  |  "));
       setPhase("setup");
       return;
     }
 
-    const a = resA.value;
-    const b = resB.value;
-    setFighterA(a);
-    setFighterB(b);
-    stateRef.current = { a: { ...a }, b: { ...b } };
-    setLog([
-      { system: true, text: `${a.name} enters the arena — "${a.introduction}"` },
-      { system: true, text: `${b.name} enters the arena — "${b.introduction}"` },
-    ]);
+    const newRoster = results.map((r) => r.value);
+    setRoster(newRoster);
+    stateRef.current = newRoster.map((f) => ({ ...f, status: [...f.status], cooldowns: { ...f.cooldowns } }));
+    setLog(newRoster.map((f) => ({ system: true, text: `${f.name} enters the arena — "${f.intro}"` })));
     runRef.current = { stop: false, pause: false };
     setPhase("battle");
     runLoop();
   }
 
   async function runLoop() {
-    let turn = 0; // 0 = A's turn, 1 = B's turn
+    let turn = 0; // index into stateRef.current
     let r = 1;
     while (!runRef.current.stop) {
       while (runRef.current.pause && !runRef.current.stop) {
@@ -309,10 +212,10 @@ export default function App() {
       if (runRef.current.stop) break;
 
       const st = stateRef.current;
-      const attacker = turn === 0 ? st.a : st.b;
-      const defender = turn === 0 ? st.b : st.a;
+      const attacker = st[turn];
+      const defender = st[1 - turn]; // two-fighter roster for Phase 2; N-fighter targeting is a Phase 3+ concern
 
-      setThinking(attacker.name);
+      setThinkingKey(attacker.key);
       let action = null;
       try {
         const recent = log
@@ -324,7 +227,7 @@ export default function App() {
           sessionId,
           attacker.key,
           r,
-          { name: attacker.name, hp: attacker.hp, energy: attacker.energy, status: attacker.status.map((s) => s.type), combat_style: attacker.combat_style, personality: attacker.personality },
+          { name: attacker.name, hp: attacker.hp, energy: attacker.energy, status: attacker.status.map((s) => s.type), combatStyle: attacker.combatStyle, personality: attacker.personality },
           { name: defender.name, hp: defender.hp, energy: defender.energy, status: defender.status.map((s) => s.type) },
           recent || "Battle just began.",
           attacker.customPrompt
@@ -333,17 +236,17 @@ export default function App() {
         logError("runLoop:turn", { round: r, actor: attacker.name, message: e.message, envelope: e instanceof ApiError ? e.envelope : null });
         action = { action: "Attack", ability_name: "Basic Strike", thought: `(connection issue: ${e.message || "unknown error"})`, description: "", energy_cost: 10 };
       }
-      setThinking(null);
+      setThinkingKey(null);
 
       const entry = resolveAction(r, attacker, defender, action);
       tickStatus(attacker);
-      stateRef.current = { ...stateRef.current };
-      setFighterA({ ...stateRef.current.a });
-      setFighterB({ ...stateRef.current.b });
+      stateRef.current = st.map((f) => ({ ...f, status: [...f.status], cooldowns: { ...f.cooldowns } }));
+      setRoster(stateRef.current);
       setLog((prev) => [...prev, entry]);
+      setLastEntry(entry);
 
-      if (defender.hp <= 0) {
-        setWinner(attacker.key);
+      if (!defender.alive) {
+        setWinnerKey(attacker.key);
         setPhase("finished");
         runRef.current.stop = true;
         break;
@@ -365,12 +268,19 @@ export default function App() {
     setPhase("setup");
     setLog([]);
     setRound(1);
-    setWinner(null);
-    setFighterA((f) => ({ ...initialFighter("A"), provider: f.provider, model: f.model, apiKey: f.apiKey, customPrompt: f.customPrompt }));
-    setFighterB((f) => ({ ...initialFighter("B"), provider: f.provider, model: f.model, apiKey: f.apiKey, customPrompt: f.customPrompt }));
+    setWinnerKey(null);
+    setLastEntry(null);
+    setRoster((prev) => {
+      const positions = computeSpawnPositions(prev.length);
+      return prev.map((f, i) => createFighter({ key: f.key, index: i, total: prev.length, provider: f.provider, model: f.model, apiKey: f.apiKey, customPrompt: f.customPrompt, position: positions[i] }));
+    });
   }
 
   const setupLocked = phase !== "setup";
+  const thinkingFighter = thinkingKey ? fighterByKey(roster, thinkingKey) : null;
+  const winnerFighter = winnerKey ? fighterByKey(roster, winnerKey) : null;
+  const fighterColors = Object.fromEntries(roster.map((f) => [f.key, f.color]));
+  const activeEffects = lastEntry?.effect ? { [lastEntry.actorKey]: lastEntry.effect } : {};
 
   return (
     <div className="min-h-screen w-full" style={{ background: VOID, color: INK, fontFamily: "'Space Grotesk', system-ui, sans-serif" }}>
@@ -434,90 +344,38 @@ export default function App() {
 
         {phase === "setup" && (
           <div className="grid md:grid-cols-2 gap-4 mb-6">
-            <FighterSetup fighter={fighterA} onChange={(v) => updateFighter("A", v)} disabled={setupLocked} colorKey="A" />
-            <FighterSetup fighter={fighterB} onChange={(v) => updateFighter("B", v)} disabled={setupLocked} colorKey="B" />
+            {roster.map((f) => (
+              <FighterSetup key={f.key} fighter={f} onChange={(v) => updateFighter(f.key, v)} disabled={setupLocked} />
+            ))}
           </div>
         )}
 
         {phase !== "setup" && (
           <>
             <div className="grid md:grid-cols-2 gap-4 mb-4">
-              {[fighterA, fighterB].map((f) => (
-                <div key={f.key} className="rounded-lg p-4 space-y-2" style={{ background: PANEL, border: `1px solid ${f.hp === 0 ? HIT : LINE}` }}>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 rounded-full" style={{ background: FIGHTER_COLORS[f.key] }} />
-                      <span className="font-semibold text-sm">{f.name}</span>
-                      {f.hp === 0 && <Skull size={14} style={{ color: HIT }} />}
-                      {winner === f.key && <Trophy size={14} style={{ color: GOLD }} />}
-                    </div>
-                    <span className="text-xs" style={{ color: DIM, fontFamily: "'IBM Plex Mono', monospace" }}>{f.combat_style}</span>
-                  </div>
-                  <Bar value={f.hp} color={f.hp > 30 ? OK : HIT} icon={<Heart size={13} style={{ color: DIM }} />} />
-                  <Bar value={f.energy} color={FIGHTER_COLORS[f.key]} icon={<Zap size={13} style={{ color: DIM }} />} />
-                  <div className="flex items-center gap-1.5 flex-wrap min-h-[18px]">
-                    {f.status.length === 0 ? (
-                      <span className="text-xs" style={{ color: LINE }}>—</span>
-                    ) : (
-                      f.status.map((s, i) => (
-                        <span key={i} className="text-xs px-1.5 py-0.5 rounded" style={{ background: VOID, color: DIM, border: `1px solid ${LINE}`, fontFamily: "'IBM Plex Mono', monospace" }}>
-                          {s.type}
-                        </span>
-                      ))
-                    )}
-                  </div>
-                </div>
+              {roster.map((f) => (
+                <CharacterCard key={f.key} fighter={f} />
               ))}
             </div>
 
-            <div className="flex items-center justify-between mb-3 px-1">
-              <span className="text-xs uppercase tracking-widest" style={{ color: DIM, fontFamily: "'IBM Plex Mono', monospace" }}>
-                Round {round}
-              </span>
-              {thinking && (
-                <span className="text-xs flex items-center gap-1.5" style={{ color: DIM, fontFamily: "'IBM Plex Mono', monospace" }}>
-                  <Loader2 size={12} className="animate-spin" /> {thinking} is deciding…
-                </span>
-              )}
-              {phase === "finished" && winner && (
-                <span className="text-xs flex items-center gap-1.5" style={{ color: GOLD, fontFamily: "'IBM Plex Mono', monospace" }}>
-                  <Trophy size={12} /> {winner === "A" ? fighterA.name : fighterB.name} wins
-                </span>
-              )}
+            <div className="mb-4">
+              <Arena fighters={roster} activeActorKey={thinkingKey} activeEffects={activeEffects} />
             </div>
 
-            <div className="rounded-lg p-4 mb-4 max-h-[420px] overflow-y-auto space-y-3" style={{ background: PANEL, border: `1px solid ${LINE}` }}>
-              {log.map((l, i) =>
-                l.system ? (
-                  <div key={i} className="text-xs italic" style={{ color: DIM }}>{l.text}</div>
-                ) : (
-                  <div key={i} className="pb-3" style={{ borderBottom: i < log.length - 1 ? `1px solid ${LINE}` : "none" }}>
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-xs font-semibold" style={{ color: FIGHTER_COLORS[l.actorKey] }}>{l.actorName}</span>
-                      <span className="text-xs" style={{ color: DIM, fontFamily: "'IBM Plex Mono', monospace" }}>R{l.round} · {l.ability_name}</span>
-                    </div>
-                    {l.thought && <p className="text-xs italic mb-1" style={{ color: DIM }}>"{l.thought}"</p>}
-                    {l.description && <p className="text-sm mb-1.5">{l.description}</p>}
-                    <div className="flex items-center gap-2 text-xs" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
-                      <ShieldCheck size={12} style={{ color: DIM }} />
-                      <span style={{ color: DIM }}>ENGINE VERDICT:</span>
-                      <span style={{
-                        color: l.result === "hit" || l.result === "lethal" ? HIT : l.result === "miss" ? DIM : l.result === "defend" ? OK : GOLD,
-                        fontWeight: 600,
-                      }}>
-                        {l.result === "hit" ? `HIT — ${l.damage} dmg` :
-                         l.result === "lethal" ? `LETHAL — ${l.damage} dmg` :
-                         l.result === "miss" ? "MISS" :
-                         l.result === "defend" ? "GUARD RAISED" :
-                         l.result === "on_cooldown" ? "COOLDOWN — SUBSTITUTED" : l.result}
-                      </span>
-                    </div>
-                    {l.engineNote && <p className="text-xs mt-1" style={{ color: GOLD }}>{l.engineNote}</p>}
-                  </div>
-                )
-              )}
-              <div ref={logEndRef} />
+            <div className="grid md:grid-cols-2 gap-4 mb-4">
+              {roster.map((f) => (
+                <HUD key={f.key} fighter={f} isWinner={winnerKey === f.key} />
+              ))}
             </div>
+
+            <BattleLog
+              log={log}
+              round={round}
+              thinkingName={thinkingFighter?.name || null}
+              phase={phase}
+              winnerName={winnerFighter?.name || null}
+              fighterColors={fighterColors}
+            />
           </>
         )}
       </div>
