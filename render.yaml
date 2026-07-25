@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: ai-battle-arena-backend
+    runtime: node
+    rootDir: backend
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: CORS_ORIGIN
+        sync: false # set manually to your Vercel URL(s), e.g. https://ai-battle-arena.vercel.app
+      - key: SESSION_TTL_MS
+        value: "7200000"
+      - key: PROVIDER_MAX_RETRIES
+        value: "2"
+      - key: PROVIDER_RETRY_BASE_MS
+        value: "400"
+      - key: PROVIDER_TIMEOUT_MS
+        value: "20000"
+      - key: REQUEST_TIMEOUT_MS
+        value: "55000"
+    # PORT is injected automatically by Render — do not set it here.
