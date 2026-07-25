@@ -9,9 +9,10 @@
 import Stickman from "./Stickman.jsx";
 import Projectile from "./Projectile.jsx";
 import DamageNumber from "./DamageNumber.jsx";
+import VFXLayer from "./VFXLayer.jsx";
 import { ARENA_WIDTH, ARENA_HEIGHT, GROUND_Y } from "../lib/battleState.js";
 
-export default function Arena({ fighters, poses = {}, activeEffects = {}, camera, projectiles = [], damageNumbers = [] }) {
+export default function Arena({ fighters, poses = {}, activeEffects = {}, camera, projectiles = [], damageNumbers = [], vfxEngine = null }) {
   const cam = camera || { x: ARENA_WIDTH / 2, zoom: 1 };
   const sceneTransform = `translate(${ARENA_WIDTH / 2}, ${ARENA_HEIGHT}) scale(${cam.zoom}) translate(${-cam.x}, ${-ARENA_HEIGHT})`;
 
@@ -58,6 +59,8 @@ export default function Arena({ fighters, poses = {}, activeEffects = {}, camera
               effectType={activeEffects[f.key] || null}
             />
           ))}
+
+          <VFXLayer engine={vfxEngine} />
 
           {damageNumbers.map((d) => (
             <DamageNumber key={d.id} x={d.x} y={d.y} text={d.text} color={d.color} />
