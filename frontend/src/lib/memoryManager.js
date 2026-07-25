@@ -14,10 +14,12 @@ function emptyFighterMemory(fighter) {
 export function createMemoryManager(roster) {
   return { fighters: Object.fromEntries(roster.map((f) => [f.key, emptyFighterMemory(f)])), turnCount: 0, lastCompressionAt: 0 };
 }
+
 export function ensureMemory(manager, fighter) {
   if (!manager.fighters[fighter.key]) manager.fighters[fighter.key] = emptyFighterMemory(fighter);
   return manager.fighters[fighter.key];
 }
+
 function words(entry) { return `${entry.ability_name || ""} ${entry.description || ""} ${entry.action || ""}`.toLowerCase(); }
 function inferRange(entry) {
   const text = words(entry);
@@ -50,6 +52,7 @@ export function updateMemoriesAfterTurn(manager, roster, entry, arenaEvents = []
   compressIfNeeded(manager);
   return manager;
 }
+
 function updateSelf(memory, fighter, entry) {
   memory.self = {
     currentHp: fighter.hp, energy: fighter.energy, cooldowns: { ...fighter.cooldowns }, knownAbilities: topKeys(memory.power),

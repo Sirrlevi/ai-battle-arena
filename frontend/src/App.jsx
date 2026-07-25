@@ -5,7 +5,7 @@ import { createFighter, resetFighterCombatState, computeSpawnPositions, ARENA_WI
 import { resolveAction, tickStatus } from "./lib/battleEngine.js";
 import { createMemoryManager, updateMemoriesAfterTurn, buildPromptContext } from "./lib/memoryManager.js";
 import { AUTHORITY_MODES, applyAuthority } from "./lib/realityAuthority.js";
-import { createVfxEngine, enqueueBattleVfx, updateVfxEngine, toggleVfxSetting } from "./lib/vfxEngine.js";
+
 import { interpretAction } from "./lib/actionInterpreter.js";
 import { createAnimState, queueAction, updateAnimation, applyHitReaction } from "./lib/animationController.js";
 import { createProjectileManager, spawnProjectile, updateProjectiles } from "./lib/projectileManager.js";
@@ -46,10 +46,7 @@ function logError(tag, info) {
 }
 
 // ---------- UI: fighter setup form (Phase 1, unchanged behavior) ----------
-function DebugPanels({ memory, authoritySnapshot, vfxEngine, onToggleVfx }) {
-  if (!memory && !authoritySnapshot) return null;
-  return (
-    <div className="grid md:grid-cols-3 gap-4 mt-4">
+
       <div className="rounded-lg p-3 max-h-96 overflow-auto" style={{ background: PANEL, border: `1px solid ${LINE}` }}>
         <div className="text-xs uppercase tracking-widest mb-2" style={{ color: GOLD, fontFamily: "'IBM Plex Mono', monospace" }}>Memory Viewer</div>
         <pre className="text-xs whitespace-pre-wrap" style={{ color: DIM }}>{JSON.stringify(memory, null, 2)}</pre>
@@ -58,15 +55,7 @@ function DebugPanels({ memory, authoritySnapshot, vfxEngine, onToggleVfx }) {
         <div className="text-xs uppercase tracking-widest mb-2" style={{ color: GOLD, fontFamily: "'IBM Plex Mono', monospace" }}>Reality Authority Viewer</div>
         <pre className="text-xs whitespace-pre-wrap" style={{ color: DIM }}>{JSON.stringify(authoritySnapshot, null, 2)}</pre>
       </div>
-      <div className="rounded-lg p-3 max-h-96 overflow-auto" style={{ background: PANEL, border: `1px solid ${LINE}` }}>
-        <div className="text-xs uppercase tracking-widest mb-2" style={{ color: GOLD, fontFamily: "'IBM Plex Mono', monospace" }}>Render Pipeline Debug</div>
-        <div className="grid grid-cols-2 gap-2 mb-3">
-          {Object.entries(vfxEngine?.settings || {}).map(([key, enabled]) => (
-            <button key={key} onClick={() => onToggleVfx?.(key)} className="px-2 py-1 rounded text-xs" style={{ background: enabled ? "#1d2a20" : VOID, color: enabled ? "#9be28f" : DIM, border: `1px solid ${LINE}` }}>{key}</button>
-          ))}
-        </div>
-        <pre className="text-xs whitespace-pre-wrap" style={{ color: DIM }}>{JSON.stringify({ particleCount: vfxEngine?.particles?.pool?.active?.length || 0, activeCommands: vfxEngine?.activeCommands?.length || 0, timelines: vfxEngine?.scheduler?.timelines?.length || 0, animationQueue: Object.fromEntries(Object.entries(vfxEngine?.queue?.layers || {}).map(([k, v]) => [k, v.length])) }, null, 2)}</pre>
-      </div>
+
     </div>
   );
 }
@@ -171,7 +160,6 @@ export default function App() {
   const projectileManagerRef = useRef(createProjectileManager());
   const cameraRef = useRef(createCamera(ARENA_WIDTH / 2));
   const memoryRef = useRef(createMemoryManager(roster));
-  const vfxRef = useRef(createVfxEngine());
 
   // Wake the backend (tolerating Render free-tier cold starts) and then
   // establish a session, as soon as the app loads.
@@ -323,7 +311,6 @@ export default function App() {
     projectileManagerRef.current = createProjectileManager();
     cameraRef.current = createCamera(ARENA_WIDTH / 2);
     memoryRef.current = createMemoryManager(newRoster);
-    vfxRef.current = createVfxEngine();
 
     setLog(newRoster.map((f) => ({ system: true, text: `${f.name} enters the arena — "${f.intro}"` })));
     runRef.current = { stop: false, pause: false };
@@ -424,7 +411,7 @@ export default function App() {
       projectileManagerRef.current = createProjectileManager();
       cameraRef.current = createCamera(ARENA_WIDTH / 2);
       memoryRef.current = createMemoryManager(next);
-      vfxRef.current = createVfxEngine();
+
       return next;
     });
   }
@@ -561,7 +548,7 @@ export default function App() {
               winnerName={winnerFighter?.name || null}
               fighterColors={fighterColors}
             />
-            {debugOpen && <DebugPanels memory={debugMemory} authoritySnapshot={authoritySnapshot} vfxEngine={vfxRef.current} onToggleVfx={(key) => { toggleVfxSetting(vfxRef.current, key); setRenderTick((t) => t + 1); }} />}
+
           </>
         )}
       </div>
