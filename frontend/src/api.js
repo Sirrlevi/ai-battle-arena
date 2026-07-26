@@ -122,7 +122,14 @@ export async function battleTurn(sessionId, fighter, round, self, enemy, recentT
   return request("/api/battle-turn", {
     method: "POST",
     body: JSON.stringify({ sessionId, fighter, round, self, enemy, recentTurns, customPrompt }),
-  }); // { action, reality, narration }
+  }); // { action, reality, narration, verdict }
+}
+
+// Phase 3.8 debug panel data: Combat Profiles, live resources (mana/stamina/
+// shield/cooldowns), and the derived ability registry. Optional — only used
+// when a developer opens the debug panel.
+export async function getCombatDebug(sessionId) {
+  return request(`/api/session/${sessionId}/combat`, { method: "GET" });
 }
 
 export async function getMemory(sessionId) {

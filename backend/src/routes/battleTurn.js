@@ -31,7 +31,7 @@ battleTurnRouter.post("/battle-turn", requireSession, async (req, res, next) => 
     // "cold" rather than failing.
     const turns = Array.isArray(recentTurns) ? recentTurns : [];
 
-    const { action, reality, narration } = await runTurn({
+    const { action, reality, narration, verdict } = await runTurn({
       session: req.session,
       sessionId: req.sessionId,
       fighterKey: fighter,
@@ -45,8 +45,8 @@ battleTurnRouter.post("/battle-turn", requireSession, async (req, res, next) => 
       referer: req.headers.origin,
     });
 
-    logger.info("battle-turn:success", { sessionId: req.sessionId, fighter, provider: config.provider, ability: action.ability_name });
-    res.json({ action, reality, narration });
+    logger.info("battle-turn:success", { sessionId: req.sessionId, fighter, provider: config.provider, ability: action.ability_name, verdictCode: verdict?.code });
+    res.json({ action, reality, narration, verdict });
   } catch (err) {
     next(err);
   }

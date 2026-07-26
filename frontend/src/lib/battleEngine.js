@@ -51,7 +51,7 @@ export function effectEmoji(type) {
   return type ? EFFECT_EMOJI[type] || null : null;
 }
 
-export function resolveAction(round, attacker, defender, action, reality = null) {
+export function resolveAction(round, attacker, defender, action, reality = null, verdict = null) {
   const entry = {
     round,
     actorKey: attacker.key,
@@ -67,6 +67,9 @@ export function resolveAction(round, attacker, defender, action, reality = null)
     eventType: reality?.eventType || "attack",
     transformTo: reality?.transformTo || null,
     isUltimate: !!reality?.isUltimate,
+    // Phase 3.8: the deterministic Combat Engine's explanation for this
+    // outcome (tier gate, validation reason, damage breakdown), when present.
+    verdict: verdict || null,
   };
 
   const round_available = attacker.cooldowns[entry.ability_name] || 0;
@@ -93,8 +96,67 @@ export function resolveAction(round, attacker, defender, action, reality = null)
 
   const authority = reality?.authority || "engine";
 
-  // ---------- Engine Authority (default, unchanged since Phase 1) ----------
+  // ---------- Engine Authority ----------
   if (authority === "engine") {
+    // Phase 3.8: a Combat Profile-aware, deterministic verdict computed
+    // server-side (see backend/src/lib/combat/combatEngine.js) — tiers,
+    // resources, cooldowns, status effects, and a real damage formula
+    // instead of a random dodge roll converting everything into flat
+    // damage. Applied directly when present.
+    if (verdict) {
+      entry.engineNote = verdict.reason || "";
+
+      if (!verdict.valid) {
+        // Validated-impossible action (no resources, on cooldown, stunned,
+        // etc.) — downgraded, never invented. See spec section 6/13.
+        entry.result = "on_cooldown";
+        entry.damage = 0;
+        entry.effect = inferEffectType(entry);
+        return entry;
+      }
+
+      if (verdict.code === "DEFEND") {
+        attacker.status.push({ type: "guarding", rounds: 1 });
+        entry.result = "defend";
+        entry.effect = inferEffectType(entry);
+        return entry;
+      }
+
+      if (verdict.healing > 0) {
+        attacker.hp = Math.min(attacker.maxHp ?? 100, attacker.hp + verdict.healing);
+        entry.healing = verdict.healing;
+        entry.result = "heal";
+        entry.effect = inferEffectType(entry);
+        return entry;
+      }
+
+      if (verdict.code === "MISS") {
+        entry.result = "miss";
+        entry.effect = inferEffectType(entry);
+        return entry;
+      }
+
+      if (!verdict.ability?.requiresTarget) {
+        // Shield / transformation / other self-directed, non-damage event.
+        entry.result = entry.eventType;
+        entry.effect = inferEffectType(entry);
+        return entry;
+      }
+
+      const dmg = Math.max(0, Math.round(verdict.damage || 0));
+      defender.hp = Math.max(0, defender.hp - dmg);
+      if (defender.hp === 0) defender.alive = false;
+      entry.damage = dmg;
+      entry.result = defender.hp === 0 ? "lethal" : dmg === 0 ? "on_cooldown" : "hit";
+      entry.statusApplied = verdict.statusApplied || [];
+      entry.knockback = verdict.physics?.knockback || 0;
+      entry.effect = inferEffectType(entry);
+      return entry;
+    }
+
+    // ---------- Fallback: no verdict available (older backend, or the
+    // profile-extraction pipeline errored out entirely) — behaves exactly
+    // as every prior phase so a battle can never hard-stop. ----------
     const dodgeChance = 0.16 + (defender.status.some((s) => s.type === "slowed") ? -0.08 : 0);
     if (Math.random() < dodgeChance) {
       entry.result = "miss";

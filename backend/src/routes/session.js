@@ -6,6 +6,7 @@ import { logger } from "../lib/logger.js";
 import { resetSessionMemory } from "../lib/memory/memoryManager.js";
 import { resetArenaMemory } from "../lib/memory/arenaTracker.js";
 import { resetAuthority } from "../lib/authority/authorityManager.js";
+import { resetCombatProfiles } from "../lib/combat/combatProfile.js";
 
 export const sessionRouter = Router();
 
@@ -59,6 +60,9 @@ sessionRouter.put("/session/:id/keys", (req, res, next) => {
     resetSessionMemory(session);
     resetArenaMemory(session);
     resetAuthority(session);
+    resetCombatProfiles(session);
+    session.resources = {};
+    session.abilityRegistry = {};
 
     logger.info("session:keys-set", { sessionId: id, providerA: fighterA.provider, providerB: fighterB.provider });
     res.json({ ok: true });

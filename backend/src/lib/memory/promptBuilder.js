@@ -23,23 +23,34 @@ const AUTHORITY_CLAUSE = {
     ANTI_BORING_PROMPT_CLAUSE,
 };
 
-export function buildTurnSystemPrompt({ fighterName, combatStyle, personality, weapon, aura, customPrompt, strategyHint, goal, authorityMode }) {
+export function buildTurnSystemPrompt({ fighterName, combatStyle, personality, weapon, aura, customPrompt, strategyHint, goal, authorityMode, combatProfile }) {
+  const profileClause = combatProfile
+    ? ` Your Combat Profile (the mechanical ground truth for this battle — stay consistent with it): tier ${combatProfile.combatTier}, ` +
+      `strength ${combatProfile.strength}/10, speed ${combatProfile.speed}/10, durability ${combatProfile.durability}/10, ` +
+      `known powers: ${combatProfile.knownPowers?.length ? combatProfile.knownPowers.join(", ") : "none notable"}.` +
+      `${combatProfile.weaknesses?.length ? ` Your weaknesses: ${combatProfile.weaknesses.join(", ")}.` : ""}`
+    : "";
   return (
     `You are ${fighterName}, a combatant in a turn-based fictional battle arena. ` +
     `Combat style: ${combatStyle || "unspecified"}. Personality: ${personality || "unspecified"}. ` +
     `Weapon: ${weapon || "none stated"}. Aura: ${aura || "none stated"}. ` +
     `Stay true to this personality for the entire battle — it must not drift turn to turn. ` +
-    `${AUTHORITY_CLAUSE[authorityMode] || AUTHORITY_CLAUSE.engine} ` +
+    `${AUTHORITY_CLAUSE[authorityMode] || AUTHORITY_CLAUSE.engine}${profileClause} ` +
     `Every ability should imply a cost or a weakness and should not be reused every single turn — prefer creativity over repetition. ` +
+    `You can see your own and your opponent's HP, energy, mana, stamina, cooldowns, and status effects each turn in the ` +
+    `"world_state" of the user message — use them. Do not declare an ability you cannot afford or that is on cooldown; ` +
+    `pick something you can actually do this turn. ` +
     `Current goal: ${goal}.${strategyHint ? ` Strategic notes: ${strategyHint}` : ""} ` +
     `Respond with ONLY a JSON object, no prose, no markdown fences. Schema: ` +
     `{"thought":string,"action":"Attack"|"Defend"|"Special","ability_name":string,"description":string,"target":"Enemy",` +
-    `"energy_cost":number (0-40),"expected_result":string}.` +
+    `"energy_cost":number (0-40),"expected_result":string,"reason":string (why this action given world_state),` +
+    `"risk":"low"|"medium"|"high","movement":string (optional positioning, e.g. "close distance", "hold ground"),` +
+    `"follow_up_plan":string (optional, what you intend next turn)}.` +
     (customPrompt?.trim() ? ` Additional direction: ${customPrompt.trim()}` : "")
   );
 }
 
-export function buildTurnUserPrompt({ round, mem, self, enemy, arenaMemory, authorityMode }) {
+export function buildTurnUserPrompt({ round, mem, self, enemy, arenaMemory, authorityMode, worldState }) {
   const recentEvents = mem.shortTerm.slice(-6).map((t) => {
     const who = t.actorKey === mem.fighterKey ? "You" : "Opponent";
     const reasoning = t.thought ? ` (reasoning: "${t.thought}")` : "";
@@ -77,6 +88,12 @@ export function buildTurnUserPrompt({ round, mem, self, enemy, arenaMemory, auth
       weather: arenaMemory.weather,
       gravity: arenaMemory.gravity,
     },
+    // Phase 3.8: the Combat Engine's live World State — the fighter's actual
+    // resources/cooldowns/status effects/tier, not just hp/energy. Only
+    // populated in Engine authority mode (see decisionEngine.js); absent
+    // (undefined, dropped by JSON.stringify) otherwise so AI/Hybrid prompts
+    // are byte-for-byte unchanged.
+    world_state: worldState || undefined,
     recent_events: recentEvents.length ? recentEvents : ["Battle just began."],
     long_term_memory: mem.longTermSummary,
     current_goal: mem.currentGoal,

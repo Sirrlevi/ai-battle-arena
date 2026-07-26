@@ -9,6 +9,7 @@ import { generateCharacterRouter } from "./src/routes/generateCharacter.js";
 import { battleTurnRouter } from "./src/routes/battleTurn.js";
 import { memoryViewRouter } from "./src/routes/memoryView.js";
 import { authorityRouter } from "./src/routes/authority.js";
+import { combatDebugRouter } from "./src/routes/combatDebug.js";
 import { errorHandler, notFoundHandler } from "./src/middleware/errorHandler.js";
 import { requestTimeout } from "./src/middleware/timeout.js";
 import { sessionCount } from "./src/lib/sessionStore.js";
@@ -71,6 +72,7 @@ app.use("/api", generateCharacterRouter);
 app.use("/api", battleTurnRouter);
 app.use("/api", memoryViewRouter);
 app.use("/api", authorityRouter);
+app.use("/api", combatDebugRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

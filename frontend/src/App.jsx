@@ -392,6 +392,7 @@ export default function App() {
       let action = null;
       let reality = null;
       let narration = null;
+      let verdict = null;
       try {
         const recentTurns = log.filter((l) => !l.system).slice(-10);
         const result = await apiBattleTurn(
@@ -406,13 +407,14 @@ export default function App() {
         action = result.action;
         reality = result.reality;
         narration = result.narration;
+        verdict = result.verdict;
       } catch (e) {
         logError("runLoop:turn", { round: r, actor: attacker.name, message: e.message, envelope: e instanceof ApiError ? e.envelope : null });
         action = { action: "Attack", ability_name: "Basic Strike", thought: `(connection issue: ${e.message || "unknown error"})`, description: "", energy_cost: 10 };
       }
       setThinkingKey(null);
 
-      const entry = resolveAction(r, attacker, defender, action, reality);
+      const entry = resolveAction(r, attacker, defender, action, reality, verdict);
       tickStatus(attacker);
       stateRef.current = st.map((f) => ({ ...f, status: [...f.status], cooldowns: { ...f.cooldowns } }));
       setRoster(stateRef.current);
