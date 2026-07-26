@@ -26,6 +26,15 @@ export function createResourceState(profile) {
     shield: 0,
     maxShield: 0,
     armor: profile.durability || 0,
+    // Phase 3.9: negotiation-protocol resources — spent on Reality/Time
+    // Defense responses and reality-warping attacks. Every fighter starts
+    // full; only profiles with realityManipulation/timeManipulation drain
+    // them meaningfully, but everyone has the pool so validation never has
+    // to special-case "doesn't have this stat".
+    realityStability: 100,
+    maxRealityStability: 100,
+    mentalStability: 100,
+    maxMentalStability: 100,
     cooldowns: {}, // ability_name -> round it becomes ready again
     buffs: [],
     debuffs: [],
@@ -55,6 +64,8 @@ export function canAfford(state, cost = {}) {
   if (cost.energy && state.energy < cost.energy) missing.push("energy");
   if (cost.mana && state.mana < cost.mana) missing.push("mana");
   if (cost.stamina && state.stamina < cost.stamina) missing.push("stamina");
+  if (cost.realityStability && state.realityStability < cost.realityStability) missing.push("reality stability");
+  if (cost.mentalStability && state.mentalStability < cost.mentalStability) missing.push("mental stability");
   return { affordable: missing.length === 0, missing };
 }
 
@@ -62,12 +73,16 @@ export function spend(state, cost = {}) {
   if (cost.energy) state.energy = clamp(state.energy - cost.energy, 0, state.maxEnergy);
   if (cost.mana) state.mana = clamp(state.mana - cost.mana, 0, state.maxMana);
   if (cost.stamina) state.stamina = clamp(state.stamina - cost.stamina, 0, state.maxStamina);
+  if (cost.realityStability) state.realityStability = clamp(state.realityStability - cost.realityStability, 0, state.maxRealityStability);
+  if (cost.mentalStability) state.mentalStability = clamp(state.mentalStability - cost.mentalStability, 0, state.maxMentalStability);
 }
 
 export function regenTick(state) {
   state.energy = clamp(state.energy + Math.round(state.maxEnergy * 0.08), 0, state.maxEnergy);
   state.stamina = clamp(state.stamina + Math.round(state.maxStamina * 0.1), 0, state.maxStamina);
   if (state.maxMana > 0) state.mana = clamp(state.mana + Math.round(state.maxMana * 0.06), 0, state.maxMana);
+  state.realityStability = clamp(state.realityStability + 3, 0, state.maxRealityStability);
+  state.mentalStability = clamp(state.mentalStability + 3, 0, state.maxMentalStability);
 }
 
 export function applyShield(state, amount, label) {

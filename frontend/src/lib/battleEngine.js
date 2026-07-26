@@ -136,6 +136,17 @@ export function resolveAction(round, attacker, defender, action, reality = null,
         return entry;
       }
 
+      // Phase 3.9: the defender's own Defense Packet neutralized this
+      // entirely (dodge/teleport/reality-or-time defense reduced it to
+      // nothing) — distinct from a plain accuracy MISS so the log/UI can
+      // show *why* (verdict.defense.note carries the explanation).
+      if (verdict.code === "DEFENDED") {
+        entry.result = "miss";
+        entry.defense = verdict.defense || null;
+        entry.effect = inferEffectType(entry);
+        return entry;
+      }
+
       if (!verdict.ability?.requiresTarget) {
         // Shield / transformation / other self-directed, non-damage event.
         entry.result = entry.eventType;
@@ -150,6 +161,18 @@ export function resolveAction(round, attacker, defender, action, reality = null,
       entry.result = defender.hp === 0 ? "lethal" : dmg === 0 ? "on_cooldown" : "hit";
       entry.statusApplied = verdict.statusApplied || [];
       entry.knockback = verdict.physics?.knockback || 0;
+      entry.defense = verdict.defense || null;
+
+      // Phase 3.9: a successful "counter" defense reflects damage back onto
+      // the ATTACKER — applied here so the attacker's own hp (tracked
+      // client-side) matches what the server already deducted from its
+      // mirrored resource state.
+      if (verdict.counterDamage > 0) {
+        attacker.hp = Math.max(0, attacker.hp - verdict.counterDamage);
+        entry.counterDamage = verdict.counterDamage;
+        if (attacker.hp === 0) attacker.alive = false;
+      }
+
       entry.effect = inferEffectType(entry);
       return entry;
     }

@@ -7,6 +7,7 @@ import { resetSessionMemory } from "../lib/memory/memoryManager.js";
 import { resetArenaMemory } from "../lib/memory/arenaTracker.js";
 import { resetAuthority } from "../lib/authority/authorityManager.js";
 import { resetCombatProfiles } from "../lib/combat/combatProfile.js";
+import { resetNegotiationMemory } from "../lib/combat/negotiationMemory.js";
 
 export const sessionRouter = Router();
 
@@ -61,6 +62,7 @@ sessionRouter.put("/session/:id/keys", (req, res, next) => {
     resetArenaMemory(session);
     resetAuthority(session);
     resetCombatProfiles(session);
+    resetNegotiationMemory(session);
     session.resources = {};
     session.abilityRegistry = {};
 

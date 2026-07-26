@@ -51,3 +51,51 @@ export function validateAction({ ability, actorState, targetState, round, arena 
 
   return { valid: true, code: "OK", reason: "Action validated — sufficient resources, no blocking conditions.", cost };
 }
+
+// ---------- DEFENSE PACKET VALIDATION ----------
+// Phase 3.9, spec section 5/6. "The engine never blindly trusts either AI" —
+// a Defense Packet is only as good as what the defender can actually afford
+// and is actually capable of. An invalid defense doesn't fail the turn; it
+// downgrades to "none" (no special defense), same philosophy as
+// validateAction: explain, downgrade, never hard-reject the turn.
+
+const CAPABILITY_REQUIREMENT = {
+  reality_defense: "realityManipulation",
+  time_defense: "timeManipulation",
+  teleport: "teleportation",
+};
+
+export function validateDefensePacket({ defensePacket, defenderProfile, defenderState, round }) {
+  const chosen = defensePacket.chosenResponse;
+
+  if (chosen === "none" || !chosen) {
+    return { valid: true, code: "OK", reason: "No special defense chosen.", chosenResponse: "none" };
+  }
+
+  const requiredCapability = CAPABILITY_REQUIREMENT[chosen];
+  if (requiredCapability && !defenderProfile?.[requiredCapability]) {
+    return {
+      valid: false, code: "CAPABILITY_MISSING", chosenResponse: "none",
+      reason: `Defender's Combat Profile does not include ${requiredCapability} — "${chosen}" downgraded to no special defense.`,
+    };
+  }
+
+  if (chosen === "counter" && isOnCooldown(defenderState, defensePacket.counterAbility || "Counter", round)) {
+    return { valid: false, code: "ON_COOLDOWN", chosenResponse: "none", reason: `Counter ability is on cooldown — downgraded to no special defense.` };
+  }
+
+  const cost = defensePacket.resourceConsumption || { energy: 0, mana: 0, stamina: 0 };
+  const affordability = canAfford(defenderState, cost);
+  if (!affordability.affordable) {
+    return {
+      valid: false, code: "INSUFFICIENT_RESOURCES", chosenResponse: "none",
+      reason: `Defender cannot afford the declared ${affordability.missing.join(" and ")} cost for "${chosen}" — downgraded to no special defense.`,
+    };
+  }
+
+  if (skipsTurn(defenderState) && chosen !== "none") {
+    return { valid: false, code: "STUNNED", chosenResponse: "none", reason: "Defender is stunned/frozen and cannot mount a special defense this round." };
+  }
+
+  return { valid: true, code: "OK", reason: `"${chosen}" validated — sufficient resources, capability present.`, chosenResponse: chosen, cost };
+}

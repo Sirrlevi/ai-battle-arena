@@ -1,42 +1,57 @@
 // ---------- WORLD STATE ----------
-// Phase 3.8, spec section 3. Every turn, the AI must be able to see its own
-// HP/energy/mana/stamina, cooldowns, status effects, and the arena — not
-// just narrate blind. This module assembles that view from engine-side
-// resource state (resources.js) + the shared arena memory (arenaTracker.js,
-// unchanged) into a compact object the prompt builder can drop straight
-// into the user turn prompt.
+// Phase 3.8 (section 3) + Phase 3.9 (section 4 — "Shared World State"). Every
+// turn, BOTH the attacking and defending AI must see an identical
+// synchronized snapshot: not just HP/energy, but mana/stamina/shield/armor,
+// reality & mental stability, cooldowns, current form, distance, and known
+// facts about the opponent. This module is the single place that snapshot
+// gets assembled, so the Attack Packet prompt and the Defense Packet prompt
+// (see attackPacket.js / defensePacket.js) never drift from each other.
 
-export function buildWorldStateView({ round, selfState, enemyState, selfProfile, enemyProfile, arenaMemory }) {
+function approximateDistance(selfPosition, enemyPosition) {
+  if (!selfPosition || !enemyPosition || !Number.isFinite(selfPosition.x) || !Number.isFinite(enemyPosition.x)) {
+    return { value: null, label: "unknown" };
+  }
+  const value = Math.round(Math.abs(selfPosition.x - enemyPosition.x));
+  const label = value <= 90 ? "melee" : value <= 260 ? "close" : "far";
+  return { value, label };
+}
+
+function fighterView(state, profile) {
+  return {
+    hp: state.hp, maxHp: state.maxHp,
+    energy: state.energy, maxEnergy: state.maxEnergy,
+    mana: state.mana, maxMana: state.maxMana,
+    stamina: state.stamina, maxStamina: state.maxStamina,
+    shield: state.shield,
+    armor: state.armor,
+    realityStability: state.realityStability,
+    mentalStability: state.mentalStability,
+    cooldowns: state.cooldowns,
+    statusEffects: state.statusEffects.map((s) => ({ type: s.type, roundsLeft: s.roundsLeft, stacks: s.stacks })),
+    currentForm: state.transformations.currentForm,
+    summons: state.summons,
+    tier: profile?.combatTier,
+  };
+}
+
+export function buildWorldStateView({ round, selfState, enemyState, selfProfile, enemyProfile, arenaMemory, selfPosition, enemyPosition }) {
+  const distance = approximateDistance(selfPosition, enemyPosition);
   return {
     round,
-    self: {
-      hp: selfState.hp, maxHp: selfState.maxHp,
-      energy: selfState.energy, maxEnergy: selfState.maxEnergy,
-      mana: selfState.mana, maxMana: selfState.maxMana,
-      stamina: selfState.stamina, maxStamina: selfState.maxStamina,
-      shield: selfState.shield,
-      cooldowns: selfState.cooldowns,
-      statusEffects: selfState.statusEffects.map((s) => ({ type: s.type, roundsLeft: s.roundsLeft, stacks: s.stacks })),
-      currentForm: selfState.transformations.currentForm,
-      tier: selfProfile?.combatTier,
-    },
+    self: fighterView(selfState, selfProfile),
     opponent: {
-      hp: enemyState.hp, maxHp: enemyState.maxHp,
-      energy: enemyState.energy, maxEnergy: enemyState.maxEnergy,
-      mana: enemyState.mana, maxMana: enemyState.maxMana,
-      stamina: enemyState.stamina, maxStamina: enemyState.maxStamina,
-      shield: enemyState.shield,
-      statusEffects: enemyState.statusEffects.map((s) => ({ type: s.type, roundsLeft: s.roundsLeft, stacks: s.stacks })),
-      currentForm: enemyState.transformations.currentForm,
-      tier: enemyProfile?.combatTier,
+      ...fighterView(enemyState, enemyProfile),
       knownPowers: enemyProfile?.knownPowers || [],
       observedWeaknesses: enemyProfile?.weaknesses || [],
     },
+    distance,
     arena: {
       weather: arenaMemory.weather,
       gravity: arenaMemory.gravity,
       timeFlow: arenaMemory.timeFlow,
       activeEvents: arenaMemory.events.map((e) => e.label),
+      terrainDamage: arenaMemory.terrainDamage || 0,
     },
   };
 }
+

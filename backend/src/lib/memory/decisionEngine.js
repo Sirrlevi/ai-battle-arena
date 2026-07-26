@@ -29,6 +29,11 @@ import { getOrExtractCombatProfile } from "../combat/combatProfile.js";
 import { getOrCreateResourceState, syncExternalVitals, regenTick } from "../combat/resources.js";
 import { buildWorldStateView } from "../combat/worldState.js";
 import { simulateTurn, tickRoundStart } from "../combat/combatEngine.js";
+import { getOrCreateAbility } from "../combat/abilityRegistry.js";
+import { buildAttackPacket } from "../combat/attackPacket.js";
+import { requestDefensePacket } from "../combat/defensePacket.js";
+import { validateDefensePacket } from "../combat/validation.js";
+import { recordAttackOutcome, recordDefenseOutcome, summarizeNegotiationPatterns } from "../combat/negotiationMemory.js";
 
 export async function runTurn({ session, sessionId, fighterKey, opponentKey, config, round, self, enemy, recentTurns, customPrompt, referer }) {
   // 1. Observe + 2. Update Memory
@@ -86,11 +91,21 @@ export async function runTurn({ session, sessionId, fighterKey, opponentKey, con
       round, selfState: selfResourceState, enemyState: enemyResourceState,
       selfProfile, enemyProfile, arenaMemory,
     });
+    // Phase 3.9 section 10: "should adapt instead of repeating attacks" —
+    // fold in what's been learned about the opponent's defensive habits.
+    worldState.opponent.negotiationPatterns = summarizeNegotiationPatterns(session, opponentKey);
 
     // Stash on session so battleTurn.js / combat debug endpoint can read it
     // without recomputing, and so simulateTurn below can mutate the same
     // object it just built the prompt view from.
-    session._combatTurnCtx = { selfProfile, enemyProfile, selfResourceState, enemyResourceState };
+    session._combatTurnCtx = {
+      selfProfile, enemyProfile, selfResourceState, enemyResourceState,
+      opponentConfig: session.fighters?.[opponentKey] || config,
+      opponentCharacter: {
+        name: enemy.name,
+        personality: opponentMem?.personality, combatStyle: opponentMem?.combatStyle,
+      },
+    };
   }
 
   // 6. Generate Action
@@ -153,12 +168,70 @@ export async function runTurn({ session, sessionId, fighterKey, opponentKey, con
 
   if (authorityMode === "engine" && session._combatTurnCtx) {
     const interpreted = interpretReality(action);
-    const { selfProfile, enemyProfile, selfResourceState, enemyResourceState } = session._combatTurnCtx;
+    const { selfProfile, enemyProfile, selfResourceState, enemyResourceState, opponentConfig, opponentCharacter } = session._combatTurnCtx;
+
+    // ---------- Phase 3.9: Negotiation Protocol ----------
+    // Stage 1 (Attacker Intent) is `action`, already produced above.
+    const ability = getOrCreateAbility(session, fighterKey, action.ability_name || "Basic Strike", {
+      interpreted, profile: selfProfile, actionType: action.action,
+    });
+
+    let defensePacket = null;
+    let defenseResolution = null;
+    let attackPacket = null;
+
+    if (action.action !== "Defend" && ability.requiresTarget) {
+      attackPacket = buildAttackPacket({ action, ability, interpreted, attackerProfile: selfProfile, round });
+
+      // Stage 2 (Defender Response): the DEFENDER's own provider/model/key
+      // reasons over the Attack Packet + its own mirrored World State.
+      const defenderWorldState = buildWorldStateView({
+        round, selfState: enemyResourceState, enemyState: selfResourceState,
+        selfProfile: enemyProfile, enemyProfile: selfProfile, arenaMemory,
+      });
+      defenderWorldState.opponent.negotiationPatterns = summarizeNegotiationPatterns(session, fighterKey);
+
+      defensePacket = await requestDefensePacket({
+        config: opponentConfig,
+        fighterName: opponentCharacter.name,
+        personality: opponentCharacter.personality,
+        combatStyle: opponentCharacter.combatStyle,
+        defenderProfile: enemyProfile,
+        attackPacket,
+        worldState: defenderWorldState,
+        referer, sessionId, fighterKey: opponentKey,
+      });
+
+      // Stage 3 (Engine Validation) — of the Defense Packet specifically;
+      // the Attack Packet side of validation happens inside simulateTurn,
+      // same as Phase 3.8.
+      defenseResolution = validateDefensePacket({ defensePacket, defenderProfile: enemyProfile, defenderState: enemyResourceState, round });
+    }
+
+    // Stage 4 (World State Synchronization) happens inside simulateTurn:
+    // it mutates selfResourceState/enemyResourceState directly, which is
+    // exactly the shared state both fighters' next turn reads from.
     engineVerdict = simulateTurn({
       session, fighterKey, opponentKey, action, interpreted,
       selfProfile, enemyProfile, selfState: selfResourceState, enemyState: enemyResourceState,
-      round, arenaMemory,
+      round, arenaMemory, defenseResolution, defensePacket,
     });
+
+    // A successful counter reflects damage onto the ATTACKER's own resource
+    // state, applied here since simulateTurn only has write access to the
+    // defender's state by design (an attacker's turn should never directly
+    // mutate its own hp downward except through this explicit, explained path).
+    if (engineVerdict.counterDamage > 0) {
+      selfResourceState.hp = Math.max(0, selfResourceState.hp - engineVerdict.counterDamage);
+    }
+
+    recordAttackOutcome(session, fighterKey, { round, action, verdict: engineVerdict, selfState: selfResourceState });
+    if (defenseResolution) {
+      recordDefenseOutcome(session, opponentKey, { round, defensePacket, defenseResolution, verdict: engineVerdict });
+    }
+
+    session._combatTurnCtx.attackPacket = attackPacket;
+    session._combatTurnCtx.defensePacket = defensePacket;
   }
 
   // Optional narrator (off by default, zero LLM cost — see refereeNarrator.js)
@@ -174,6 +247,8 @@ export async function runTurn({ session, sessionId, fighterKey, opponentKey, con
 
   return {
     action, reality, narration, verdict: engineVerdict,
+    attackPacket: session._combatTurnCtx?.attackPacket || null,
+    defensePacket: session._combatTurnCtx?.defensePacket || null,
     memorySnapshot: { goal: mem.currentGoal, strategyHint: strategy.hint },
   };
 }
