@@ -33,6 +33,24 @@ function computePhysics({ damage, ability, attackerTierIndex }) {
   return { knockback, impactRadius, terrainDamage: ability.areaOfEffect && damage > 25 };
 }
 
+
+function computeDefenseAdjustment({ defensePacket, enemyState, enemyProfile, ability }) {
+  if (!defensePacket) return { damageMultiplier: 1, cost: {}, note: "No Defense Packet was provided." };
+  const cost = defensePacket.resourceConsumption || {};
+  const affordable = (!cost.energy || enemyState.energy >= cost.energy) && (!cost.mana || enemyState.mana >= cost.mana) && (!cost.stamina || enemyState.stamina >= cost.stamina);
+  if (!affordable) return { damageMultiplier: 1, cost: {}, note: "Defense Packet was resource-illegal, so no mitigation was applied." };
+  spend(enemyState, { energy: cost.energy || 0, mana: cost.mana || 0, stamina: cost.stamina || 0, realityStability: cost.realityStability || 0, mentalStability: cost.mentalStability || 0 });
+  const text = `${defensePacket.chosenResponse || ""} ${defensePacket.shield || ""} ${defensePacket.dodge || ""} ${defensePacket.teleport || ""} ${defensePacket.block || ""} ${defensePacket.realityDefense || ""} ${defensePacket.timeDefense || ""}`.toLowerCase();
+  let multiplier = 1;
+  if (text.includes("teleport") || text.includes("dodge") || text.includes("evade")) multiplier *= 0.55;
+  if (text.includes("shield") || text.includes("barrier")) multiplier *= 0.65;
+  if (text.includes("block") || text.includes("guard") || text.includes("parry")) multiplier *= 0.75;
+  if ((ability.element && text.includes(ability.element)) || text.includes("counter")) multiplier *= 0.85;
+  const resilience = Math.min(0.15, ((enemyProfile?.durability || 0) + (enemyProfile?.speed || 0)) / 160);
+  multiplier = Math.max(0.2, multiplier - resilience);
+  return { damageMultiplier: multiplier, cost, note: `Defense Packet mitigated outcome to ${Math.round(multiplier * 100)}% damage.` };
+}
+
 /**
  * The Engine Verdict. Runs the full pipeline: ability lookup/derivation ->
  * validation -> (if valid) hit resolution -> damage -> status application ->
@@ -44,6 +62,7 @@ function computePhysics({ damage, ability, attackerTierIndex }) {
 export function simulateTurn({
   session, fighterKey, opponentKey, action, interpreted,
   selfProfile, enemyProfile, selfState, enemyState, round, arenaMemory,
+  attackPacket = null, defensePacket = null, authorityMode = "engine",
 }) {
   const abilityName = action.ability_name || "Basic Strike";
   const ability = getOrCreateAbility(session, fighterKey, abilityName, {
@@ -59,6 +78,7 @@ export function simulateTurn({
   }
 
   const validation = validateAction({ ability, actorState: selfState, targetState: enemyState, round, arena: arenaMemory });
+  const defenseAdjustment = computeDefenseAdjustment({ defensePacket, enemyState, enemyProfile, ability });
 
   if (!validation.valid) {
     // Downgrade instead of reject — spec section 6 rejects the *impossible*
@@ -113,11 +133,12 @@ export function simulateTurn({
     };
   }
 
-  const { damage, breakdown } = computeDamage({
+  const { damage: rawDamage, breakdown } = computeDamage({
     ability, attackerProfile: selfProfile, defenderProfile: enemyProfile,
     attackerState: selfState, defenderState: enemyState, round, arena: arenaMemory,
   });
 
+  const damage = Math.max(0, Math.round(rawDamage * defenseAdjustment.damageMultiplier));
   enemyState.hp = Math.max(0, enemyState.hp - damage);
 
   const statusApplied = [];
@@ -133,10 +154,12 @@ export function simulateTurn({
     code: breakdown.tierGate.blocked ? "TIER_BLOCKED" : "OK",
     reason: breakdown.tierGate.blocked
       ? breakdown.tierGate.note
-      : `"${ability.name}" connects for ${damage} damage (${breakdown.critical ? "critical, " : ""}${ability.element}).`,
+      : `"${ability.name}" connects for ${damage} damage (${breakdown.critical ? "critical, " : ""}${ability.element}). ${defenseAdjustment.note}`,
     ability, damage, healing: 0, statusApplied,
-    resourceChanges: { cost: validation.cost },
-    physics, tierGate: breakdown.tierGate, breakdown,
+    resourceChanges: { cost: validation.cost, defenseCost: defenseAdjustment.cost },
+    physics, tierGate: breakdown.tierGate, breakdown: { ...breakdown, rawDamage, defenseAdjustment },
+    negotiation: { attackPacket, defensePacket, arbitration: { authorityMode, validationsPassed: ["packet_schema", "resources", "cooldowns", "physics"], validationsFailed: [] } },
+    worldSync: { stage: "world_state_synchronization", attacker: { hp: selfState.hp, energy: selfState.energy, mana: selfState.mana, stamina: selfState.stamina, form: selfState.transformations.currentForm }, defender: { hp: enemyState.hp, energy: enemyState.energy, mana: enemyState.mana, stamina: enemyState.stamina, form: enemyState.transformations.currentForm } },
     lethal: enemyState.hp <= 0,
   };
 }

@@ -29,6 +29,7 @@ import { getOrExtractCombatProfile } from "../combat/combatProfile.js";
 import { getOrCreateResourceState, syncExternalVitals, regenTick } from "../combat/resources.js";
 import { buildWorldStateView } from "../combat/worldState.js";
 import { simulateTurn, tickRoundStart } from "../combat/combatEngine.js";
+import { buildAttackPacket, actionFromAttackPacket, requestDefensePacket, recordNegotiationPacket, summarizeArbitration } from "../negotiation/negotiationProtocol.js";
 
 export async function runTurn({ session, sessionId, fighterKey, opponentKey, config, round, self, enemy, recentTurns, customPrompt, referer }) {
   // 1. Observe + 2. Update Memory
@@ -45,15 +46,18 @@ export async function runTurn({ session, sessionId, fighterKey, opponentKey, con
   const strategy = chooseStrategy(mem, self, enemy);
   const authorityMode = getAuthorityMode(session);
 
-  // ---------- Phase 3.8: Combat Profile + World State ----------
-  // Only in Engine authority mode — this is the "combat engine rewrite"
-  // target. AI/Hybrid authority keep their exact pre-3.8 prompt/behavior
-  // (spec: "DO NOT redesign", "only improve the internal combat engine").
+  // ---------- Phase 3.9: Combat Profile + synchronized World State ----------
+  // All authority modes now receive the same world-state contract before AI
+  // decisions. Engine mode keeps Phase 3.8 deterministic resolution; Hybrid
+  // layers packet negotiation over engine validation; AI Authority validates
+  // packets/resources without inventing missing AI choices.
   let combatProfile = null;
+  let enemyCombatProfile = null;
   let worldState = null;
+  let defenderWorldState = null;
   let engineVerdict = null;
 
-  if (authorityMode === "engine") {
+  {
     const opponentMem = session.memory?.[opponentKey];
     const [selfProfile, enemyProfile] = await Promise.all([
       getOrExtractCombatProfile(session, fighterKey, {
@@ -71,6 +75,7 @@ export async function runTurn({ session, sessionId, fighterKey, opponentKey, con
       }),
     ]);
     combatProfile = selfProfile;
+    enemyCombatProfile = enemyProfile;
 
     const selfResourceState = getOrCreateResourceState(session, fighterKey, selfProfile);
     const enemyResourceState = getOrCreateResourceState(session, opponentKey, enemyProfile);
@@ -84,7 +89,15 @@ export async function runTurn({ session, sessionId, fighterKey, opponentKey, con
 
     worldState = buildWorldStateView({
       round, selfState: selfResourceState, enemyState: enemyResourceState,
-      selfProfile, enemyProfile, arenaMemory,
+      selfProfile, enemyProfile, arenaMemory, battleMemory: mem,
+      positions: { self: self.position || null, enemy: enemy.position || null },
+      distance: Number.isFinite(self.distance) ? self.distance : null,
+    });
+    defenderWorldState = buildWorldStateView({
+      round, selfState: enemyResourceState, enemyState: selfResourceState,
+      selfProfile: enemyProfile, enemyProfile: selfProfile, arenaMemory, battleMemory: opponentMem,
+      positions: { self: enemy.position || null, enemy: self.position || null },
+      distance: Number.isFinite(self.distance) ? self.distance : null,
     });
 
     // Stash on session so battleTurn.js / combat debug endpoint can read it
@@ -129,35 +142,35 @@ export async function runTurn({ session, sessionId, fighterKey, opponentKey, con
     });
   }
 
-  const action = {
-    thought: parsed.thought || "",
-    action: parsed.action || "Attack",
-    ability_name: parsed.ability_name || "Basic Strike",
-    description: parsed.description || "",
-    target: parsed.target || "Enemy",
-    energy_cost: Number.isFinite(parsed.energy_cost) ? parsed.energy_cost : 12,
-    expected_result: parsed.expected_result || "",
-    // Phase 3.8 Action Intent fields (spec section 5) — additive, always
-    // present (empty string/default when the model omits them) so callers
-    // never have to guard against missing keys.
-    reason: parsed.reason || "",
-    risk: ["low", "medium", "high"].includes(parsed.risk) ? parsed.risk : "medium",
-    movement: parsed.movement || "",
-    follow_up_plan: parsed.follow_up_plan || "",
-  };
+  const attackPacket = buildAttackPacket(parsed, { fighterKey, opponentKey, round, authorityMode, worldState });
+  recordNegotiationPacket(session, fighterKey, attackPacket);
+  const action = actionFromAttackPacket(attackPacket, parsed);
+
+  // Stage 2 — Defender Response. The opponent gets the complete Attack
+  // Packet plus the same synchronized world from their perspective. Provider
+  // retry/timeout behavior is delegated to callModel; if it ultimately fails
+  // we propagate the error instead of fabricating a defense.
+  const defenderMemory = getOrCreateMemory(session, opponentKey, { personality: enemy.personality, combatStyle: enemy.combatStyle, weapon: enemy.weapon, aura: enemy.aura });
+  const defensePacket = await requestDefensePacket({
+    session, sessionId, defenderKey: opponentKey, attackerKey: fighterKey,
+    config: session.fighters?.[opponentKey], round, defender: enemy, attackPacket,
+    worldState: defenderWorldState || worldState, memory: defenderMemory,
+    authorityMode, combatProfile: enemyCombatProfile, referer,
+  });
+  if (defensePacket) recordNegotiationPacket(session, opponentKey, defensePacket);
 
   // Reality Authority Layer: queried before the (client-side) battle engine
   // resolves this action. In "engine" mode this now carries the full,
   // deterministic Combat Engine verdict instead of being a no-op.
   const reality = evaluateAction(session, action);
 
-  if (authorityMode === "engine" && session._combatTurnCtx) {
+  if ((authorityMode === "engine" || authorityMode === "hybrid") && session._combatTurnCtx) {
     const interpreted = interpretReality(action);
     const { selfProfile, enemyProfile, selfResourceState, enemyResourceState } = session._combatTurnCtx;
     engineVerdict = simulateTurn({
       session, fighterKey, opponentKey, action, interpreted,
       selfProfile, enemyProfile, selfState: selfResourceState, enemyState: enemyResourceState,
-      round, arenaMemory,
+      round, arenaMemory, attackPacket, defensePacket, authorityMode,
     });
   }
 
@@ -173,7 +186,7 @@ export async function runTurn({ session, sessionId, fighterKey, opponentKey, con
   }
 
   return {
-    action, reality, narration, verdict: engineVerdict,
+    action, reality, narration, verdict: engineVerdict ? { ...engineVerdict, negotiation: engineVerdict.negotiation || { attackPacket, defensePacket, arbitration: summarizeArbitration({ authorityMode, validation: { valid: engineVerdict.valid, code: engineVerdict.code }, attackPacket, defensePacket }) } } : { negotiation: { attackPacket, defensePacket, arbitration: summarizeArbitration({ authorityMode, validation: null, attackPacket, defensePacket }) } },
     memorySnapshot: { goal: mem.currentGoal, strategyHint: strategy.hint },
   };
 }

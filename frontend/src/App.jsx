@@ -3,10 +3,10 @@ import { Swords, Play, Pause, RotateCcw, AlertTriangle, Loader2 } from "lucide-r
 import { createSession, setSessionKeys, generateCharacter as apiGenerateCharacter, battleTurn as apiBattleTurn, waitForBackend, API_BASE, ApiError, getMemory, getAuthority, setAuthority as apiSetAuthority } from "./api.js";
 import { createFighter, resetFighterCombatState, computeSpawnPositions, ARENA_WIDTH, GROUND_Y } from "./lib/battleState.js";
 import { resolveAction, tickStatus } from "./lib/battleEngine.js";
-import { interpretAction } from "./lib/actionInterpreter.js";
-import { createAnimState, queueAction, updateAnimation, applyHitReaction } from "./lib/animationController.js";
+import { createAnimState, enqueueVisualEvents, updateAnimation, applyHitReaction } from "./lib/animationController.js";
+import { createAnimationEventBus, enqueueAnimationEvents, buildAnimationEventsFromEntry, peekAnimationDebug } from "./lib/animationEventBus.js";
 import { createProjectileManager, spawnProjectile, updateProjectiles } from "./lib/projectileManager.js";
-import { createCamera, updateCamera } from "./lib/cameraController.js";
+import { createCamera, updateCamera, applyCameraEvent } from "./lib/cameraController.js";
 import { useAnimationFrame } from "./hooks/useAnimationFrame.js";
 import Arena from "./components/Arena.jsx";
 import HUD from "./components/HUD.jsx";
@@ -36,6 +36,7 @@ const PROVIDERS = [
 const MOTION_BOUNDS = { minX: 40, maxX: ARENA_WIDTH - 40 };
 const TORSO_OFFSET_Y = -80; // where projectiles launch from / aim at, relative to a fighter's feet
 let dmgNumberId = 1;
+let particleId = 1;
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -133,6 +134,7 @@ export default function App() {
   const [backendOk, setBackendOk] = useState(null); // null = checking, true/false once known
   const [wakeAttempt, setWakeAttempt] = useState(0);
   const [damageNumbers, setDamageNumbers] = useState([]);
+  const [particles, setParticles] = useState([]);
   const [, setRenderTick] = useState(0); // forces a re-render every animation frame
 
   // Phase 3.5: Reality Authority + debug panels
@@ -151,6 +153,7 @@ export default function App() {
   const animRef = useRef(makeAnimMap(roster));
   const projectileManagerRef = useRef(createProjectileManager());
   const cameraRef = useRef(createCamera(ARENA_WIDTH / 2));
+  const animationBusRef = useRef(createAnimationEventBus());
 
   // Wake the backend (tolerating Render free-tier cold starts) and then
   // establish a session, as soon as the app loads.
@@ -177,6 +180,22 @@ export default function App() {
     connect();
     return () => { cancelled = true; };
   }, []);
+
+  function pushParticles(kindList = [], x, y) {
+    const next = kindList.flatMap((kind, i) => Array.from({ length: kind === "debris" ? 5 : 3 }, (_, n) => ({
+      id: particleId++,
+      kind,
+      x: x + (n - 1) * 10 + i * 4,
+      y: y - n * 8,
+      vx: (n - 1) * 34,
+      vy: -40 - n * 12,
+      age: 0,
+      life: kind === "barrier" ? 0.7 : 0.55,
+      radius: kind === "debris" ? 5 : 4,
+      spin: n * 24,
+    })));
+    if (next.length) setParticles((prev) => [...prev, ...next].slice(-90));
+  }
 
   function pushDamageNumber(x, y, damage, color) {
     const id = dmgNumberId++;
@@ -205,6 +224,7 @@ export default function App() {
     if (impact.result === "hit" || impact.result === "lethal") {
       applyHitReaction(targetAnim, actorAnim.motion.x);
       pushDamageNumber(targetAnim.motion.x, targetAnim.motion.y + TORSO_OFFSET_Y, impact.damage, HIT);
+      pushParticles([impact.projectileVariant === "fireball" ? "fire" : "dust"], targetAnim.motion.x, targetAnim.motion.y + TORSO_OFFSET_Y);
     }
   }
 
@@ -222,12 +242,15 @@ export default function App() {
       if (impact) handleImpact(anim, impact.targetKey, impact);
     }
 
+    setParticles((prev) => prev.map((p) => ({ ...p, age: p.age + dt, x: p.x + (p.vx || 0) * dt, y: p.y + (p.vy || 0) * dt, vy: (p.vy || 0) + 180 * dt, spin: (p.spin || 0) + 140 * dt })).filter((p) => p.age < p.life));
+
     updateProjectiles(projectileManagerRef.current, dt, (p) => {
       if (p.payload?.result === "hit" || p.payload?.result === "lethal") {
         const targetAnim = animRef.current[p.targetKey];
         if (targetAnim) {
           applyHitReaction(targetAnim, p.fromX);
           pushDamageNumber(p.toX, p.toY, p.payload.damage, HIT);
+          pushParticles([p.variant === "fireball" ? "fire" : "energy", "dust"], p.toX, p.toY);
         }
       }
     });
@@ -331,6 +354,7 @@ export default function App() {
     setWinnerKey(null);
     setLastEntry(null);
     setDamageNumbers([]);
+    setParticles([]);
     setAuthorityModeState("engine");
     setRefereeEnabledState(false);
     setAuthorityData(null);
@@ -410,7 +434,11 @@ export default function App() {
         verdict = result.verdict;
       } catch (e) {
         logError("runLoop:turn", { round: r, actor: attacker.name, message: e.message, envelope: e instanceof ApiError ? e.envelope : null });
-        action = { action: "Attack", ability_name: "Basic Strike", thought: `(connection issue: ${e.message || "unknown error"})`, description: "", energy_cost: 10 };
+        setThinkingKey(null);
+        runRef.current.pause = true;
+        setPhase("paused");
+        setLog((prev) => [...prev, { system: true, text: `⚠️ Battle paused: ${attacker.name}'s provider failed before a valid Phase 3.9 combat packet could be produced (${e.message || "unknown error"}). No attack or defense was fabricated.` }]);
+        return;
       }
       setThinkingKey(null);
 
@@ -426,14 +454,23 @@ export default function App() {
       if (memoryPanelOpen) refreshMemory();
       if (authorityPanelOpen) refreshAuthority();
 
-      // Hand the resolved outcome to the animation layer: it decides HOW to
-      // show it (melee dash-in, projectile flight, block pose, ...) while
-      // the actual hp/energy numbers above are already final.
+      // Phase 3.95: engine verdict -> Animation Event Bus -> renderer.
+      // The renderer receives a queued visualization of the already-resolved
+      // combat event; it never invents attacks or outcomes.
       const attackerAnim = animRef.current[attacker.key];
       const defenderAnim = animRef.current[defender.key];
       if (attackerAnim && defenderAnim) {
-        const intent = interpretAction(entry);
-        queueAction(attackerAnim, intent, defenderAnim, entry);
+        const events = buildAnimationEventsFromEntry(entry).map((event) => ({ ...event, opponentAnim: event.actorKey === attacker.key ? defenderAnim : attackerAnim }));
+        enqueueAnimationEvents(animationBusRef.current, events);
+        for (const event of events) {
+          const actorAnim = animRef.current[event.actorKey];
+          if (actorAnim) enqueueVisualEvents(actorAnim, [event]);
+          if (event.camera) applyCameraEvent(cameraRef.current, event);
+          if (event.particles?.length) {
+            const origin = animRef.current[event.actorKey]?.motion || attackerAnim.motion;
+            pushParticles(event.particles, origin.x, origin.y + TORSO_OFFSET_Y);
+          }
+        }
       }
 
       if (!defender.alive) {
@@ -462,6 +499,7 @@ export default function App() {
     setWinnerKey(null);
     setLastEntry(null);
     setDamageNumbers([]);
+    setParticles([]);
     setRoster((prev) => {
       const positions = computeSpawnPositions(prev.length);
       const next = prev.map((f, i) => createFighter({ key: f.key, index: i, total: prev.length, provider: f.provider, model: f.model, apiKey: f.apiKey, customPrompt: f.customPrompt, position: positions[i] }));
@@ -469,6 +507,7 @@ export default function App() {
       animRef.current = makeAnimMap(next);
       projectileManagerRef.current = createProjectileManager();
       cameraRef.current = createCamera(ARENA_WIDTH / 2);
+      animationBusRef.current = createAnimationEventBus();
       return next;
     });
   }
@@ -478,6 +517,7 @@ export default function App() {
   const winnerFighter = winnerKey ? fighterByKey(roster, winnerKey) : null;
   const fighterColors = Object.fromEntries(roster.map((f) => [f.key, f.color]));
   const activeEffects = lastEntry?.effect ? { [lastEntry.actorKey]: lastEntry.effect } : {};
+  const animationDebug = peekAnimationDebug(animationBusRef.current);
 
   const poses = Object.fromEntries(
     roster.map((f) => {
@@ -485,7 +525,7 @@ export default function App() {
       return [
         f.key,
         anim
-          ? { x: anim.motion.x, y: anim.motion.y, facing: anim.motion.facing, state: anim.state, attackPhase: anim.attackPhase, flashing: anim.flashTimer > 0 }
+          ? { x: anim.motion.x, y: anim.motion.y, facing: anim.motion.facing, state: anim.state, attackPhase: anim.attackPhase, flashing: anim.flashTimer > 0, currentEvent: anim.currentEvent, movement: { vx: anim.motion.vx, vy: anim.motion.vy, grounded: anim.motion.grounded, mode: anim.motion.mode } }
           : { x: f.position.x, y: f.position.y, facing: 1, state: "idle", attackPhase: null, flashing: false },
       ];
     })
@@ -609,7 +649,11 @@ export default function App() {
                 camera={cameraRef.current}
                 projectiles={projectileManagerRef.current.items}
                 damageNumbers={damageNumbers}
+                particles={particles}
               />
+              <div className="mt-2 rounded p-2 text-xs" style={{ background: PANEL, border: `1px solid ${LINE}`, color: DIM, fontFamily: "'IBM Plex Mono', monospace" }}>
+                <span style={{ color: GOLD }}>Animation Sync</span> · Queue: {animationDebug.queue.length} · Current: {animationDebug.current?.name || "none"} · Event IDs: {animationDebug.eventIds.join(", ") || "none"}
+              </div>
             </div>
 
             <div className="grid md:grid-cols-2 gap-4 mb-4">

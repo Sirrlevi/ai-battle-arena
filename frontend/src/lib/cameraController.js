@@ -5,7 +5,17 @@
 // just a critically-damped lerp toward a target pan/zoom each frame.
 
 export function createCamera(centerX) {
-  return { x: centerX, zoom: 1, targetX: centerX, targetZoom: 1 };
+  return { x: centerX, zoom: 1, targetX: centerX, targetZoom: 1, shake: 0, shakeT: 0, snapX: null };
+}
+
+export function applyCameraEvent(camera, event = {}) {
+  const shake = event.camera?.shake;
+  if (shake === "large") camera.shake = Math.max(camera.shake, 16);
+  else if (shake === "medium") camera.shake = Math.max(camera.shake, 9);
+  else if (shake === "small") camera.shake = Math.max(camera.shake, 4);
+  if (event.camera?.zoom === "out") camera.targetZoom = Math.min(camera.targetZoom, 0.68);
+  if (event.camera?.zoom === "in") camera.targetZoom = Math.max(camera.targetZoom, 1.08);
+  if (event.name === "Teleport" && Number.isFinite(event.x)) camera.x = event.x;
 }
 
 export function updateCamera(camera, fighters, arenaWidth, dt) {
@@ -22,5 +32,10 @@ export function updateCamera(camera, fighters, arenaWidth, dt) {
   const followLerp = Math.min(1, dt * 3);
   camera.x += (camera.targetX - camera.x) * followLerp;
   camera.zoom += (camera.targetZoom - camera.zoom) * followLerp;
+  if (camera.shake > 0) {
+    camera.shakeT += dt * 42;
+    camera.x += Math.sin(camera.shakeT) * camera.shake * 0.08;
+    camera.shake = Math.max(0, camera.shake - dt * 28);
+  }
   return camera;
 }

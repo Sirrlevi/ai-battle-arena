@@ -18,6 +18,7 @@ combatDebugRouter.get("/session/:id/combat", (req, res, next) => {
       combatProfiles: session.combatProfiles || {},
       resources: session.resources || {},
       abilityRegistry: session.abilityRegistry || {},
+      negotiationMemory: session.negotiationMemory || { packets: [], byFighter: {} },
     });
   } catch (err) {
     next(err);

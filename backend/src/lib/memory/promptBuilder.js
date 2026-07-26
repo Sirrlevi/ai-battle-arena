@@ -41,11 +41,13 @@ export function buildTurnSystemPrompt({ fighterName, combatStyle, personality, w
     `"world_state" of the user message — use them. Do not declare an ability you cannot afford or that is on cooldown; ` +
     `pick something you can actually do this turn. ` +
     `Current goal: ${goal}.${strategyHint ? ` Strategic notes: ${strategyHint}` : ""} ` +
+    `Phase 3.9: first create an Attack Packet. The packet describes your intended action only; it does not decide damage or success. ` +
     `Respond with ONLY a JSON object, no prose, no markdown fences. Schema: ` +
-    `{"thought":string,"action":"Attack"|"Defend"|"Special","ability_name":string,"description":string,"target":"Enemy",` +
-    `"energy_cost":number (0-40),"expected_result":string,"reason":string (why this action given world_state),` +
-    `"risk":"low"|"medium"|"high","movement":string (optional positioning, e.g. "close distance", "hold ground"),` +
-    `"follow_up_plan":string (optional, what you intend next turn)}.` +
+    `{"thought":string,"action":"Attack"|"Defend"|"Special","action_name":string,"ability_name":string,"ability_used":string,` +
+    `"description":string,"target":"Enemy","power_category":string,"element":string,"intent":string,"expected_result":string,` +
+    `"energy_cost":number (0-40),"mana_cost":number,"stamina_cost":number,"cooldown":number,"range":string,"area_of_effect":string,` +
+    `"movement":string,"follow_up_plan":string,"special_effects":array,"status_effects":array,"reality_effects":array,"timeline_effects":array,` +
+    `"reason":string (why this action given world_state),"risk":"low"|"medium"|"high"}.` +
     (customPrompt?.trim() ? ` Additional direction: ${customPrompt.trim()}` : "")
   );
 }
@@ -97,6 +99,6 @@ export function buildTurnUserPrompt({ round, mem, self, enemy, arenaMemory, auth
     recent_events: recentEvents.length ? recentEvents : ["Battle just began."],
     long_term_memory: mem.longTermSummary,
     current_goal: mem.currentGoal,
-    instruction: "Decide your action for this turn as the JSON schema described, staying consistent with your personality and the strategic notes.",
+    instruction: "Stage 1 — Attacker Intent: create an Attack Packet using the schema described. Use the synchronized world_state, your identity, opponent awareness, current form, resources, cooldowns, and battle memory.",
   });
 }

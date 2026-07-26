@@ -24,7 +24,56 @@ export function createAnimState(x, y, groundY) {
     hitTimer: 0,
     flashTimer: 0,
     homeX: x,
+    eventQueue: [],
+    currentEvent: null,
+    eventTimer: 0,
+    particles: [],
   };
+}
+
+
+export function enqueueVisualEvents(anim, events = []) {
+  anim.eventQueue.push(...events);
+}
+
+function startVisualEvent(anim, event, opponentAnim) {
+  anim.currentEvent = event;
+  anim.eventTimer = 0;
+  const name = String(event.name || "").toLowerCase();
+
+  if (event.channel === "pose" && name === "death") return;
+  if (event.channel === "defense" || name.includes("block") || name.includes("shield") || name.includes("barrier")) {
+    anim.blockTimer = Math.max(anim.blockTimer, (event.duration || 600) / 1000);
+    return;
+  }
+  if (event.channel === "effect" && name.includes("transformation")) {
+    anim.blockTimer = Math.max(anim.blockTimer, (event.duration || 900) / 1000);
+    anim.motion.mode = "hover";
+    return;
+  }
+  if (event.channel === "effect" && name.includes("heal")) {
+    anim.blockTimer = Math.max(anim.blockTimer, (event.duration || 700) / 1000);
+    return;
+  }
+  if (event.channel === "movement") {
+    const dir = opponentAnim?.motion?.x >= anim.motion.x ? 1 : -1;
+    const targetX = opponentAnim ? opponentAnim.motion.x - dir * MELEE_RANGE : anim.homeX;
+    if (name.includes("teleport")) {
+      anim.motion.x = targetX;
+      anim.motion.facing = dir;
+      return;
+    }
+    if (name.includes("fly") || name.includes("hover")) issueCommand(anim.motion, name.includes("fly") ? "fly" : "hover", targetX, anim.motion.y - 42);
+    else if (name.includes("jump")) issueCommand(anim.motion, "jump");
+    else if (name.includes("dash") || name.includes("sprint")) issueCommand(anim.motion, "dash", targetX);
+    else issueCommand(anim.motion, "walk", targetX);
+    return;
+  }
+  if (event.channel === "attack" || event.channel === "charge") {
+    const isProjectile = !!event.projectileVariant || ["beam", "laser", "fireball", "lightning", "ice", "gravity crush", "reality crack"].some((w) => name.includes(w));
+    anim.attackPhase = { variant: event.projectileVariant || name || "punch", phase: "windup", t: 0, sourceEventId: event.id };
+    anim.pendingImpact = event.channel === "attack" ? { targetKey: event.defenderKey, damage: event.source?.result === "miss" ? 0 : event.damage, result: event.result || event.source?.result, projectileVariant: event.projectileVariant, spawnProjectile: isProjectile, sourceEventId: event.id } : null;
+  }
 }
 
 /**
@@ -86,6 +135,21 @@ export function applyHitReaction(anim, fromX) {
 export function updateAnimation(anim, dt, bounds, homeReturnX, alive = true) {
   updateMotion(anim.motion, dt, bounds);
 
+  if (!anim.currentEvent && anim.eventQueue.length > 0) {
+    // Events are consumed one at a time from the engine-authored queue.
+    // Non-actor metadata events are skipped by actors but remain in bus history.
+    const next = anim.eventQueue.shift();
+    startVisualEvent(anim, next, next.opponentAnim);
+  }
+  if (anim.currentEvent) {
+    anim.eventTimer += dt;
+    const duration = (anim.currentEvent.duration || 160) / 1000;
+    if (anim.eventTimer >= duration && !anim.attackPhase && !anim.motion.command && anim.blockTimer <= 0) {
+      anim.currentEvent = null;
+      anim.eventTimer = 0;
+    }
+  }
+
   if (anim.blockTimer > 0) anim.blockTimer = Math.max(0, anim.blockTimer - dt);
   if (anim.hitTimer > 0) anim.hitTimer = Math.max(0, anim.hitTimer - dt);
   if (anim.flashTimer > 0) anim.flashTimer = Math.max(0, anim.flashTimer - dt);
@@ -117,6 +181,7 @@ export function updateAnimation(anim, dt, bounds, homeReturnX, alive = true) {
           issueCommand(anim.motion, "walk", homeReturnX ?? anim.homeX);
         } else {
           anim.attackPhase = null;
+          if (anim.currentEvent?.channel === "attack" || anim.currentEvent?.channel === "charge") anim.currentEvent = null;
         }
       }
     }

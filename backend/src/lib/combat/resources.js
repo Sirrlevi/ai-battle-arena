@@ -26,6 +26,9 @@ export function createResourceState(profile) {
     shield: 0,
     maxShield: 0,
     armor: profile.durability || 0,
+    realityStability: 100,
+    mentalStability: 100,
+    ultimateCharges: 0,
     cooldowns: {}, // ability_name -> round it becomes ready again
     buffs: [],
     debuffs: [],
@@ -55,6 +58,9 @@ export function canAfford(state, cost = {}) {
   if (cost.energy && state.energy < cost.energy) missing.push("energy");
   if (cost.mana && state.mana < cost.mana) missing.push("mana");
   if (cost.stamina && state.stamina < cost.stamina) missing.push("stamina");
+  if (cost.realityStability && state.realityStability < cost.realityStability) missing.push("realityStability");
+  if (cost.mentalStability && state.mentalStability < cost.mentalStability) missing.push("mentalStability");
+  if (cost.ultimateCharges && state.ultimateCharges < cost.ultimateCharges) missing.push("ultimateCharges");
   return { affordable: missing.length === 0, missing };
 }
 
@@ -62,6 +68,9 @@ export function spend(state, cost = {}) {
   if (cost.energy) state.energy = clamp(state.energy - cost.energy, 0, state.maxEnergy);
   if (cost.mana) state.mana = clamp(state.mana - cost.mana, 0, state.maxMana);
   if (cost.stamina) state.stamina = clamp(state.stamina - cost.stamina, 0, state.maxStamina);
+  if (cost.realityStability) state.realityStability = clamp(state.realityStability - cost.realityStability, 0, 100);
+  if (cost.mentalStability) state.mentalStability = clamp(state.mentalStability - cost.mentalStability, 0, 100);
+  if (cost.ultimateCharges) state.ultimateCharges = Math.max(0, state.ultimateCharges - cost.ultimateCharges);
 }
 
 export function regenTick(state) {

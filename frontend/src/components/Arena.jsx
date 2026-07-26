@@ -9,9 +9,10 @@
 import Stickman from "./Stickman.jsx";
 import Projectile from "./Projectile.jsx";
 import DamageNumber from "./DamageNumber.jsx";
+import ParticleLayer from "./ParticleLayer.jsx";
 import { ARENA_WIDTH, ARENA_HEIGHT, GROUND_Y } from "../lib/battleState.js";
 
-export default function Arena({ fighters, poses = {}, activeEffects = {}, camera, projectiles = [], damageNumbers = [] }) {
+export default function Arena({ fighters, poses = {}, activeEffects = {}, camera, projectiles = [], damageNumbers = [], particles = [] }) {
   const cam = camera || { x: ARENA_WIDTH / 2, zoom: 1 };
   const sceneTransform = `translate(${ARENA_WIDTH / 2}, ${ARENA_HEIGHT}) scale(${cam.zoom}) translate(${-cam.x}, ${-ARENA_HEIGHT})`;
 
@@ -45,6 +46,8 @@ export default function Arena({ fighters, poses = {}, activeEffects = {}, camera
 
         {/* Camera-driven scene: fighters, projectiles, damage numbers */}
         <g transform={sceneTransform}>
+          <ParticleLayer particles={particles} />
+
           {projectiles.map((p) => (
             <Projectile key={p.id} projectile={p} />
           ))}

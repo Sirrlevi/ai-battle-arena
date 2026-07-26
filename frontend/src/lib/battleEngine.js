@@ -96,8 +96,8 @@ export function resolveAction(round, attacker, defender, action, reality = null,
 
   const authority = reality?.authority || "engine";
 
-  // ---------- Engine Authority ----------
-  if (authority === "engine") {
+  // ---------- Engine / Hybrid server verdict path ----------
+  if (authority === "engine" || (authority === "hybrid" && verdict?.damage !== undefined)) {
     // Phase 3.8: a Combat Profile-aware, deterministic verdict computed
     // server-side (see backend/src/lib/combat/combatEngine.js) — tiers,
     // resources, cooldowns, status effects, and a real damage formula
@@ -176,7 +176,7 @@ export function resolveAction(round, attacker, defender, action, reality = null,
     return entry;
   }
 
-  // ---------- AI / Hybrid Authority ----------
+  // ---------- AI / legacy Hybrid Authority fallback ----------
   if (reality.softened && reality.softenNote) entry.engineNote += ` ${reality.softenNote}`;
 
   if (NON_DAMAGE_EVENTS.has(entry.eventType)) {
