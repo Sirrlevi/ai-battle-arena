@@ -26,27 +26,39 @@ function armAngleFor(attackPhase, facing) {
   return 0;
 }
 
-export default function Stickman({ fighter, pose, auraFilterId, effectType = null }) {
+export default function Stickman({ fighter, pose, auraFilterId, effectType = null, statusVisuals = [] }) {
   const { name, hp, maxHp = 100, energy, maxEnergy = 100, color, alive } = fighter;
   const { x, y, facing = 1, state = "idle", attackPhase = null, flashing = false } = pose || {};
 
   const hpPct = Math.max(0, Math.min(1, hp / maxHp));
   const energyPct = Math.max(0, Math.min(1, energy / maxEnergy));
   const emoji = effectEmoji(effectType) || (state === "blocking" ? "🛡️" : null);
-  const strokeColor = flashing ? "#FFFFFF" : color;
+  const transforming = state === "transforming";
+  const strokeColor = flashing ? "#FFFFFF" : transforming ? "#F5E663" : color;
 
   const rotation = alive ? 0 : 90;
   const opacity = alive ? 1 : 0.4;
   const armAngle = armAngleFor(attackPhase, facing);
   const actingArmIsRight = facing >= 0;
+  const transformScale = transforming ? 1.08 : 1;
 
   return (
-    <g transform={`translate(${x}, ${y}) rotate(${rotation})`} opacity={opacity}>
+    <g transform={`translate(${x}, ${y}) rotate(${rotation}) scale(${transformScale})`} opacity={opacity}>
       {/* Aura glow */}
-      <ellipse cx={0} cy={HIP_Y} rx={46} ry={78} fill={color} opacity={alive ? 0.16 : 0.06} filter={auraFilterId ? `url(#${auraFilterId})` : undefined} />
-      {(state === "attacking" || state === "running" || state === "flying") && alive && (
-        <ellipse cx={0} cy={HIP_Y} rx={54} ry={86} fill="none" stroke={color} strokeWidth={2} opacity={0.5} />
+      <ellipse cx={0} cy={HIP_Y} rx={46} ry={78} fill={color} opacity={alive ? (transforming ? 0.32 : 0.16) : 0.06} filter={auraFilterId ? `url(#${auraFilterId})` : undefined} />
+      {(state === "attacking" || state === "running" || state === "flying" || transforming) && alive && (
+        <ellipse cx={0} cy={HIP_Y} rx={54} ry={86} fill="none" stroke={transforming ? "#F5E663" : color} strokeWidth={transforming ? 3 : 2} opacity={0.5} />
       )}
+
+      {/* Phase 3.95: status-effect aura rings — one thin ring per active, engine-applied status (see statusVisuals.js), never invented by the renderer. */}
+      {alive && statusVisuals.map((v, i) => (
+        <ellipse
+          key={`${v.label}-${i}`}
+          cx={0} cy={HIP_Y}
+          rx={58 + i * 8} ry={92 + i * 8}
+          fill="none" stroke={v.color} strokeWidth={1.5} strokeDasharray="4 4" opacity={0.55}
+        />
+      ))}
 
       {/* Body */}
       <circle cx={0} cy={HEAD_CY} r={HEAD_R} fill="none" stroke={strokeColor} strokeWidth={3} />

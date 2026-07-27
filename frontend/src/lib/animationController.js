@@ -14,6 +14,7 @@ const HIT_REACT_DURATION = 0.25;
 const FLASH_DURATION = 0.18;
 const BLOCK_DURATION = 0.6;
 const KNOCKBACK_SPEED = 260;
+const TRANSFORM_PAUSE_DURATION = 0.9; // spec section 7: "pause combat briefly"
 
 export function createAnimState(x, y, groundY) {
   return {
@@ -23,8 +24,15 @@ export function createAnimState(x, y, groundY) {
     blockTimer: 0,
     hitTimer: 0,
     flashTimer: 0,
+    transformTimer: 0, // Phase 3.95: >0 while a transformation animation is playing
+    statusVisuals: [], // Phase 3.95: active status-effect visuals (see statusVisuals.js), refreshed each turn
     homeX: x,
   };
+}
+
+/** Phase 3.95 section 7: called when an Animation Event Bus "Transformation" event fires — briefly freezes the fighter's pose (the state machine's "transforming" rule takes over) before combat resumes. */
+export function triggerTransformation(anim) {
+  anim.transformTimer = TRANSFORM_PAUSE_DURATION;
 }
 
 /**
@@ -89,6 +97,7 @@ export function updateAnimation(anim, dt, bounds, homeReturnX, alive = true) {
   if (anim.blockTimer > 0) anim.blockTimer = Math.max(0, anim.blockTimer - dt);
   if (anim.hitTimer > 0) anim.hitTimer = Math.max(0, anim.hitTimer - dt);
   if (anim.flashTimer > 0) anim.flashTimer = Math.max(0, anim.flashTimer - dt);
+  if (anim.transformTimer > 0) anim.transformTimer = Math.max(0, anim.transformTimer - dt);
 
   let impact = null;
 
@@ -125,6 +134,7 @@ export function updateAnimation(anim, dt, bounds, homeReturnX, alive = true) {
   const state = resolveAnimationState({
     alive,
     hitTimer: anim.hitTimer,
+    transformTimer: anim.transformTimer,
     attackPhase: anim.attackPhase?.phase === "approach" ? null : anim.attackPhase,
     blocking: anim.blockTimer > 0,
     mode: anim.motion.mode,

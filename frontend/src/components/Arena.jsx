@@ -9,11 +9,14 @@
 import Stickman from "./Stickman.jsx";
 import Projectile from "./Projectile.jsx";
 import DamageNumber from "./DamageNumber.jsx";
+import Particle from "./Particle.jsx";
 import { ARENA_WIDTH, ARENA_HEIGHT, GROUND_Y } from "../lib/battleState.js";
 
-export default function Arena({ fighters, poses = {}, activeEffects = {}, camera, projectiles = [], damageNumbers = [] }) {
-  const cam = camera || { x: ARENA_WIDTH / 2, zoom: 1 };
-  const sceneTransform = `translate(${ARENA_WIDTH / 2}, ${ARENA_HEIGHT}) scale(${cam.zoom}) translate(${-cam.x}, ${-ARENA_HEIGHT})`;
+export default function Arena({ fighters, poses = {}, activeEffects = {}, camera, projectiles = [], damageNumbers = [], particles = [], statusVisualsByFighter = {} }) {
+  const cam = camera || { x: ARENA_WIDTH / 2, zoom: 1, shakeOffsetX: 0, shakeOffsetY: 0 };
+  const shakeX = cam.shakeOffsetX || 0;
+  const shakeY = cam.shakeOffsetY || 0;
+  const sceneTransform = `translate(${ARENA_WIDTH / 2 + shakeX}, ${ARENA_HEIGHT + shakeY}) scale(${cam.zoom}) translate(${-cam.x}, ${-ARENA_HEIGHT})`;
 
   return (
     <div className="w-full rounded-lg overflow-hidden" style={{ border: "1px solid #23282f", background: "#0A0C0F" }}>
@@ -56,13 +59,23 @@ export default function Arena({ fighters, poses = {}, activeEffects = {}, camera
               pose={poses[f.key]}
               auraFilterId="stickmanAuraBlur"
               effectType={activeEffects[f.key] || null}
+              statusVisuals={statusVisualsByFighter[f.key] || []}
             />
           ))}
 
           {damageNumbers.map((d) => (
             <DamageNumber key={d.id} x={d.x} y={d.y} text={d.text} color={d.color} />
           ))}
+
+          {particles.map((p) => (
+            <Particle key={p.id} particle={p} />
+          ))}
         </g>
+
+        {/* Phase 3.95 camera-snap flash (teleport events) — outside the scene transform so it reads as a full-screen cut, not a world-space effect. */}
+        {cam.snapFlash > 0 && (
+          <rect x={0} y={0} width={ARENA_WIDTH} height={ARENA_HEIGHT} fill="#FFFFFF" opacity={cam.snapFlash * 0.35} />
+        )}
       </svg>
     </div>
   );

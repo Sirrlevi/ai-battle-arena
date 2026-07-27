@@ -4,9 +4,12 @@ import { createSession, setSessionKeys, generateCharacter as apiGenerateCharacte
 import { createFighter, resetFighterCombatState, computeSpawnPositions, ARENA_WIDTH, GROUND_Y } from "./lib/battleState.js";
 import { resolveAction, tickStatus } from "./lib/battleEngine.js";
 import { interpretAction } from "./lib/actionInterpreter.js";
-import { createAnimState, queueAction, updateAnimation, applyHitReaction } from "./lib/animationController.js";
+import { createAnimState, queueAction, updateAnimation, applyHitReaction, triggerTransformation } from "./lib/animationController.js";
 import { createProjectileManager, spawnProjectile, updateProjectiles } from "./lib/projectileManager.js";
-import { createCamera, updateCamera } from "./lib/cameraController.js";
+import { createCamera, updateCamera, triggerCameraEvent } from "./lib/cameraController.js";
+import { createEventBus, on, emit, buildAnimationEvents, buildDebugSnapshot, cameraEventFor, particleEventsFor } from "./lib/animationEventBus.js";
+import { createParticleSystem, emitParticles, updateParticles, livingParticles } from "./lib/particleSystem.js";
+import { activeStatusVisuals, visualForStatus } from "./lib/statusVisuals.js";
 import { useAnimationFrame } from "./hooks/useAnimationFrame.js";
 import Arena from "./components/Arena.jsx";
 import HUD from "./components/HUD.jsx";
@@ -14,6 +17,7 @@ import CharacterCard from "./components/CharacterCard.jsx";
 import BattleLog from "./components/BattleLog.jsx";
 import MemoryViewer from "./components/MemoryViewer.jsx";
 import RealityAuthorityViewer from "./components/RealityAuthorityViewer.jsx";
+import AnimationDebugPanel from "./components/AnimationDebugPanel.jsx";
 
 const INK = "#EDEAE3";
 const VOID = "#0A0C0F";
@@ -152,6 +156,13 @@ export default function App() {
   const projectileManagerRef = useRef(createProjectileManager());
   const cameraRef = useRef(createCamera(ARENA_WIDTH / 2));
 
+  // Phase 3.95: Animation Sync Engine
+  const eventBusRef = useRef(createEventBus());
+  const particleSystemRef = useRef(createParticleSystem());
+  const animationTimelineRef = useRef([]); // spec section 11: one recorded entry per resolved turn, replayable
+  const animDebugRef = useRef(null);
+  const [animDebugOpen, setAnimDebugOpen] = useState(false);
+
   // Wake the backend (tolerating Render free-tier cold starts) and then
   // establish a session, as soon as the app loads.
   useEffect(() => {
@@ -233,9 +244,45 @@ export default function App() {
     });
 
     updateCamera(cameraRef.current, currentRoster.map((f) => ({ alive: f.alive, motion: animRef.current[f.key]?.motion })), ARENA_WIDTH, dt);
+    updateParticles(particleSystemRef.current, dt);
 
     setRenderTick((t) => t + 1);
   }, true);
+
+  // Phase 3.95, spec section 12: the Animation Event Bus is a real pub/sub —
+  // runLoop only ever emits "turn:resolved"; this is the one place that
+  // listens and fans it out to camera/particles/transformation/timeline.
+  // Registered once so re-renders don't pile up duplicate listeners.
+  useEffect(() => {
+    const bus = eventBusRef.current;
+    const unsubscribe = on(bus, "turn:resolved", ({ entry, animEvents }) => {
+      const camEvt = cameraEventFor(entry);
+      if (camEvt) triggerCameraEvent(cameraRef.current, camEvt.kind);
+
+      const impactAnim = animRef.current[entry.defenderKey];
+      const fallbackFighter = stateRef.current.find((f) => f.key === entry.defenderKey);
+      for (const pe of particleEventsFor(entry)) {
+        emitParticles(
+          particleSystemRef.current,
+          pe.particle,
+          impactAnim?.motion.x ?? fallbackFighter?.position.x ?? 0,
+          (impactAnim?.motion.y ?? fallbackFighter?.position.y ?? 0) + TORSO_OFFSET_Y,
+          { intensity: pe.intensity }
+        );
+      }
+
+      if (animEvents.some((e) => e.type === "Transformation")) {
+        const actorAnimForTransform = animRef.current[entry.actorKey];
+        if (actorAnimForTransform) triggerTransformation(actorAnimForTransform);
+      }
+
+      animDebugRef.current = buildDebugSnapshot(entry, animEvents);
+      animationTimelineRef.current = [...animationTimelineRef.current, {
+        round: entry.round, actorKey: entry.actorKey, defenderKey: entry.defenderKey, animEvents, cameraEvent: camEvt,
+      }].slice(-200);
+    });
+    return unsubscribe;
+  }, []);
 
   function updateFighter(key, val) {
     setRoster((prev) => prev.map((f) => (f.key === key ? val : f)));
@@ -368,6 +415,9 @@ export default function App() {
     animRef.current = makeAnimMap(newRoster);
     projectileManagerRef.current = createProjectileManager();
     cameraRef.current = createCamera(ARENA_WIDTH / 2);
+    particleSystemRef.current = createParticleSystem();
+    animationTimelineRef.current = [];
+    animDebugRef.current = null;
 
     setLog(newRoster.map((f) => ({ system: true, text: `${f.name} enters the arena — "${f.intro}"` })));
     runRef.current = { stop: false, pause: false };
@@ -416,6 +466,32 @@ export default function App() {
 
       const entry = resolveAction(r, attacker, defender, action, reality, verdict);
       tickStatus(attacker);
+
+      // Phase 3.95: Animation Event Bus. Reads ONLY what the engine already
+      // validated (entry.verdict / entry.statusApplied / entry.defense /
+      // entry.eventType) — never re-derives combat from prose. Falls back
+      // to the pre-3.95 keyword interpreter only when no verdict exists
+      // (AI/Hybrid Authority), same fallback contract as every other
+      // Phase 3.8/3.9 frontend integration point.
+      const animEvents = buildAnimationEvents(entry);
+      entry.animationEvents = animEvents;
+
+      // Newly-applied status effects get a visual-only entry on the
+      // defender's status list so Stickman can render an aura ring for
+      // them — purely cosmetic, never read by any damage/dodge formula.
+      if (entry.statusApplied?.length) {
+        for (const applied of entry.statusApplied) {
+          if (visualForStatus(applied.type)) {
+            defender.status.push({ type: applied.type, rounds: applied.roundsLeft || 2, stacks: applied.stacks || 1, visualOnly: true });
+          }
+        }
+      }
+
+      // Hand off to the Animation Event Bus (section 12) — camera/particle/
+      // transformation/timeline dispatch all happen in the one subscriber
+      // registered in the useEffect above, not here.
+      emit(eventBusRef.current, "turn:resolved", { entry, animEvents });
+
       stateRef.current = st.map((f) => ({ ...f, status: [...f.status], cooldowns: { ...f.cooldowns } }));
       setRoster(stateRef.current);
       lastRealityRef.current = reality;
@@ -469,6 +545,9 @@ export default function App() {
       animRef.current = makeAnimMap(next);
       projectileManagerRef.current = createProjectileManager();
       cameraRef.current = createCamera(ARENA_WIDTH / 2);
+      particleSystemRef.current = createParticleSystem();
+      animationTimelineRef.current = [];
+      animDebugRef.current = null;
       return next;
     });
   }
@@ -490,6 +569,7 @@ export default function App() {
       ];
     })
   );
+  const statusVisualsByFighter = Object.fromEntries(roster.map((f) => [f.key, activeStatusVisuals(f.status)]));
 
   return (
     <div className="min-h-screen w-full" style={{ background: VOID, color: INK, fontFamily: "'Space Grotesk', system-ui, sans-serif" }}>
@@ -539,6 +619,11 @@ export default function App() {
               </button>
             )}
             {phase !== "setup" && (
+              <button onClick={() => setAnimDebugOpen((o) => !o)} className="flex items-center gap-2 px-3 py-2 rounded text-sm font-medium" style={{ background: animDebugOpen ? "#1c2027" : PANEL, color: animDebugOpen ? GOLD : DIM, border: `1px solid ${animDebugOpen ? GOLD : LINE}` }}>
+                🎬 Animation
+              </button>
+            )}
+            {phase !== "setup" && (
               <button onClick={reset} className="flex items-center gap-2 px-4 py-2 rounded text-sm font-medium" style={{ background: "transparent", color: DIM, border: `1px solid ${LINE}` }}>
                 <RotateCcw size={15} /> Reset
               </button>
@@ -582,6 +667,13 @@ export default function App() {
               loading={authorityLoading}
               onClose={toggleAuthorityPanel}
             />
+            <AnimationDebugPanel
+              open={animDebugOpen}
+              snapshot={animDebugRef.current}
+              camera={cameraRef.current}
+              poses={poses}
+              onClose={() => setAnimDebugOpen(false)}
+            />
           </>
         )}
 
@@ -609,6 +701,8 @@ export default function App() {
                 camera={cameraRef.current}
                 projectiles={projectileManagerRef.current.items}
                 damageNumbers={damageNumbers}
+                particles={livingParticles(particleSystemRef.current)}
+                statusVisualsByFighter={statusVisualsByFighter}
               />
             </div>
 

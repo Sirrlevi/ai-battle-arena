@@ -7,6 +7,7 @@
 
 export const STATES = [
   "dead",
+  "transforming",
   "hit",
   "attacking",
   "blocking",
@@ -21,6 +22,7 @@ export const STATES = [
 
 const RULES = [
   { name: "dead", test: (ctx) => !ctx.alive },
+  { name: "transforming", test: (ctx) => ctx.transformTimer > 0 },
   { name: "hit", test: (ctx) => ctx.hitTimer > 0 },
   { name: "attacking", test: (ctx) => !!ctx.attackPhase },
   { name: "blocking", test: (ctx) => ctx.blocking },
