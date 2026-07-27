@@ -7,11 +7,13 @@ const TYPE_COLOR = {
   dust: "#7C8590",
   smoke: "#8A8F98",
   fire: "#FF7A45",
+  ice: "#7DE8FF",
   lightning: "#F5E663",
   energy: "#7DE8FF",
   debris: "#4A4E58",
   rock_fragment: "#5A5E68",
   magic_circle: "#B46BFF",
+  magic: "#B46BFF",
   reality_fragment: "#B46BFF",
   stars: "#F5E663",
   galaxy: "#7C6BFF",
@@ -19,6 +21,8 @@ const TYPE_COLOR = {
   healing: "#3ECF8E",
   aura_trail: "#8FD62E",
   explosion_ring: "#E8B94A",
+  shockwave: "#EDEAE3",
+  shield_sparks: "#7DE8FF",
 };
 
 export default function Particle({ particle }) {

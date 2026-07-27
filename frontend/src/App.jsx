@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Swords, Play, Pause, RotateCcw, AlertTriangle, Loader2 } from "lucide-react";
-import { createSession, setSessionKeys, generateCharacter as apiGenerateCharacter, battleTurn as apiBattleTurn, waitForBackend, API_BASE, ApiError, getMemory, getAuthority, setAuthority as apiSetAuthority } from "./api.js";
+import { createSession, setSessionKeys, generateCharacter as apiGenerateCharacter, battleTurn as apiBattleTurn, waitForBackend, API_BASE, ApiError, getMemory, getAuthority, setAuthority as apiSetAuthority, getCombatDebug } from "./api.js";
+import { detectBeamClash } from "./lib/beamClash.js";
 import { createFighter, resetFighterCombatState, computeSpawnPositions, ARENA_WIDTH, GROUND_Y } from "./lib/battleState.js";
 import { resolveAction, tickStatus } from "./lib/battleEngine.js";
 import { interpretAction } from "./lib/actionInterpreter.js";
@@ -163,6 +164,12 @@ export default function App() {
   const animDebugRef = useRef(null);
   const [animDebugOpen, setAnimDebugOpen] = useState(false);
 
+  // Phase 4: persistent environment destruction (section 9) + cached
+  // per-fighter power tier for aura scaling (section 6, best-effort — only
+  // populated in Engine Authority mode, via the Phase 3.8 debug endpoint).
+  const terrainMarksRef = useRef([]);
+  const combatTierRef = useRef({});
+
   // Wake the backend (tolerating Render free-tier cold starts) and then
   // establish a session, as soon as the app loads.
   useEffect(() => {
@@ -208,13 +215,13 @@ export default function App() {
         toY: targetAnim.motion.y + TORSO_OFFSET_Y,
         ownerKey: actorAnim.key,
         targetKey,
-        payload: { damage: impact.damage, result: impact.result },
+        payload: { damage: impact.damage, result: impact.result, knockback: impact.knockback || 0 },
       });
       return;
     }
 
     if (impact.result === "hit" || impact.result === "lethal") {
-      applyHitReaction(targetAnim, actorAnim.motion.x);
+      applyHitReaction(targetAnim, actorAnim.motion.x, { damage: impact.damage, knockback: impact.knockback || 0, lethal: impact.result === "lethal" });
       pushDamageNumber(targetAnim.motion.x, targetAnim.motion.y + TORSO_OFFSET_Y, impact.damage, HIT);
     }
   }
@@ -224,27 +231,33 @@ export default function App() {
   useAnimationFrame((dt) => {
     if (phase === "setup" || phase === "paused") return;
 
+    // Phase 4 section 11 (slow-motion camera event): gameplay updates run
+    // on a time-scaled dt so an ultimate/death/beam-clash moment visibly
+    // slows down; the camera's own decay always uses the real dt so shake/
+    // zoom/time-scale itself recovers at a consistent rate regardless.
+    const effDt = dt * (cameraRef.current.timeScale ?? 1);
+
     const currentRoster = stateRef.current;
     for (const f of currentRoster) {
       const anim = animRef.current[f.key];
       if (!anim) continue;
-      const { impact, state } = updateAnimation(anim, dt, MOTION_BOUNDS, anim.homeX, f.alive);
+      const { impact, state } = updateAnimation(anim, effDt, MOTION_BOUNDS, anim.homeX, f.alive);
       anim.state = state;
       if (impact) handleImpact(anim, impact.targetKey, impact);
     }
 
-    updateProjectiles(projectileManagerRef.current, dt, (p) => {
+    updateProjectiles(projectileManagerRef.current, effDt, (p) => {
       if (p.payload?.result === "hit" || p.payload?.result === "lethal") {
         const targetAnim = animRef.current[p.targetKey];
         if (targetAnim) {
-          applyHitReaction(targetAnim, p.fromX);
+          applyHitReaction(targetAnim, p.fromX, { damage: p.payload.damage, knockback: p.payload.knockback || 0, lethal: p.payload.result === "lethal" });
           pushDamageNumber(p.toX, p.toY, p.payload.damage, HIT);
         }
       }
     });
 
     updateCamera(cameraRef.current, currentRoster.map((f) => ({ alive: f.alive, motion: animRef.current[f.key]?.motion })), ARENA_WIDTH, dt);
-    updateParticles(particleSystemRef.current, dt);
+    updateParticles(particleSystemRef.current, effDt);
 
     setRenderTick((t) => t + 1);
   }, true);
@@ -258,6 +271,34 @@ export default function App() {
     const unsubscribe = on(bus, "turn:resolved", ({ entry, animEvents }) => {
       const camEvt = cameraEventFor(entry);
       if (camEvt) triggerCameraEvent(cameraRef.current, camEvt.kind);
+
+      // Phase 4 section 5: Beam Clash — see beamClash.js for the honest
+      // scoping note (this project's engine is strictly turn-based, so this
+      // detects the closest real analogue: a ranged attack the defender
+      // answered with its own validated "counter").
+      const clash = detectBeamClash(entry);
+      if (clash) {
+        triggerCameraEvent(cameraRef.current, "beam-clash-camera");
+        const attackerAnim = animRef.current[entry.actorKey];
+        const defenderAnim = animRef.current[entry.defenderKey];
+        const midX = attackerAnim && defenderAnim ? (attackerAnim.motion.x + defenderAnim.motion.x) / 2 : undefined;
+        const midY = attackerAnim && defenderAnim ? (attackerAnim.motion.y + defenderAnim.motion.y) / 2 + TORSO_OFFSET_Y : undefined;
+        if (midX != null) {
+          emitParticles(particleSystemRef.current, "shockwave", midX, midY, { intensity: "high" });
+          emitParticles(particleSystemRef.current, "energy", midX, midY, { intensity: "high" });
+        }
+      }
+
+      // Phase 4 section 9: environment destruction persists for the rest of
+      // the battle (capped, so a very long fight doesn't grow this list
+      // forever) — a static scorch mark at the point of impact, driven only
+      // by the Combat Engine's own physics.terrainDamage flag.
+      if (entry.verdict?.physics?.terrainDamage) {
+        const defenderAnim = animRef.current[entry.defenderKey];
+        const fallbackFighter = stateRef.current.find((f) => f.key === entry.defenderKey);
+        const markX = defenderAnim?.motion.x ?? fallbackFighter?.position.x ?? ARENA_WIDTH / 2;
+        terrainMarksRef.current = [...terrainMarksRef.current, { x: markX, id: `${entry.round}-${entry.defenderKey}`, size: Math.min(60, 20 + (entry.damage || 0) * 0.6) }].slice(-40);
+      }
 
       const impactAnim = animRef.current[entry.defenderKey];
       const fallbackFighter = stateRef.current.find((f) => f.key === entry.defenderKey);
@@ -418,11 +459,31 @@ export default function App() {
     particleSystemRef.current = createParticleSystem();
     animationTimelineRef.current = [];
     animDebugRef.current = null;
+    terrainMarksRef.current = [];
+    combatTierRef.current = {};
 
     setLog(newRoster.map((f) => ({ system: true, text: `${f.name} enters the arena — "${f.intro}"` })));
     runRef.current = { stop: false, pause: false };
     setPhase("battle");
     runLoop();
+
+    // Phase 4 section 6: best-effort fetch of both fighters' Combat
+    // Profiles (Phase 3.8) for aura power-tier scaling — only meaningful in
+    // Engine Authority mode, and only once profiles have actually been
+    // extracted server-side (first turn or two), so this is deliberately
+    // fire-and-forget with no loading state or retry: the aura just
+    // gracefully stays hp/energy-only until/unless it resolves.
+    setTimeout(() => {
+      getCombatDebug(sessionId)
+        .then((data) => {
+          const tiers = {};
+          for (const [key, profile] of Object.entries(data.combatProfiles || {})) {
+            if (Number.isFinite(profile.combatTierIndex)) tiers[key] = profile.combatTierIndex;
+          }
+          combatTierRef.current = tiers;
+        })
+        .catch(() => {}); // AI/Hybrid Authority or a still-empty profile cache — aura just falls back silently
+    }, 2500);
   }
 
   async function runLoop() {
@@ -547,6 +608,8 @@ export default function App() {
       cameraRef.current = createCamera(ARENA_WIDTH / 2);
       particleSystemRef.current = createParticleSystem();
       animationTimelineRef.current = [];
+      terrainMarksRef.current = [];
+      combatTierRef.current = {};
       animDebugRef.current = null;
       return next;
     });
@@ -564,8 +627,12 @@ export default function App() {
       return [
         f.key,
         anim
-          ? { x: anim.motion.x, y: anim.motion.y, facing: anim.motion.facing, state: anim.state, attackPhase: anim.attackPhase, flashing: anim.flashTimer > 0 }
-          : { x: f.position.x, y: f.position.y, facing: 1, state: "idle", attackPhase: null, flashing: false },
+          ? {
+              x: anim.motion.x, y: anim.motion.y, facing: anim.motion.facing, state: anim.state, attackPhase: anim.attackPhase, flashing: anim.flashTimer > 0,
+              hitReaction: anim.hitReaction, transformProgress: anim.transformProgress, trail: anim.trail, clock: anim.clock,
+              vx: anim.motion.vx, vy: anim.motion.vy, grounded: anim.motion.grounded, mode: anim.motion.mode,
+            }
+          : { x: f.position.x, y: f.position.y, facing: 1, state: "idle", attackPhase: null, flashing: false, hitReaction: null, transformProgress: 0, trail: [], clock: 0, vx: 0, vy: 0, grounded: true, mode: "idle" },
       ];
     })
   );
@@ -672,6 +739,8 @@ export default function App() {
               snapshot={animDebugRef.current}
               camera={cameraRef.current}
               poses={poses}
+              particleCount={livingParticles(particleSystemRef.current).length}
+              statusVisualsByFighter={statusVisualsByFighter}
               onClose={() => setAnimDebugOpen(false)}
             />
           </>
@@ -703,6 +772,8 @@ export default function App() {
                 damageNumbers={damageNumbers}
                 particles={livingParticles(particleSystemRef.current)}
                 statusVisualsByFighter={statusVisualsByFighter}
+                terrainMarks={terrainMarksRef.current}
+                combatTierByFighter={combatTierRef.current}
               />
             </div>
 

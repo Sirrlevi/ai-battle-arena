@@ -76,8 +76,30 @@ const DEFENSE_ANIMATION = {
   transformation: "Transformation",
 };
 
+// ---------- Audio Event Pipeline (spec section 17) ----------
+// "No actual audio assets are required yet" — this is purely the event
+// layer, so a future sound system just has to subscribe to the bus and
+// look up a real asset per tag instead of inventing its own event source.
+const AUDIO_TAG = {
+  Punch: "punch", Kick: "kick", Combo: "punch", Uppercut: "punch", Roundhouse: "kick",
+  Grab: "punch", Throw: "punch", Beam: "beam", Laser: "beam", Fireball: "beam", Explosion: "explosion",
+  Lightning: "beam", Ice: "beam", "Charge Energy": "charge", Transformation: "transformation",
+  Heal: "aura", Shield: "aura", Barrier: "aura", Block: "punch", Parry: "punch", Counter: "punch",
+  Teleport: "landing", Summon: "aura", "Ground Slam": "explosion", "Air Combo": "punch",
+  "Small Flinch": "punch", "Heavy Hit": "punch", Knockback: "punch", Death: "death",
+  "Reality Crack": "explosion", "Time Stop": "charge",
+};
+
+function audioTagFor(type) {
+  return AUDIO_TAG[type] || null;
+}
+
+export function audioEventsFor(animEvents) {
+  return animEvents.map((e) => ({ tag: audioTagFor(e.type), sourceEventId: e.id })).filter((e) => e.tag);
+}
+
 function makeEvent(type, category, payload = {}, source = "engine") {
-  return { id: nextEventId++, type, category, payload, source };
+  return { id: nextEventId++, type, category, payload, source, audioTag: audioTagFor(type) };
 }
 
 /**
@@ -111,11 +133,11 @@ function primaryAnimationName(entry, interpreted) {
 }
 
 function cameraEventFor(entry) {
-  if (entry.result === "lethal") return { kind: "medium-shake" };
-  if (entry.isUltimate) return { kind: "large-shake" };
+  if (entry.result === "lethal") return { kind: "death-camera" };
+  if (entry.isUltimate) return { kind: "ultimate-camera" };
   if (entry.verdict?.ability?.areaOfEffect && (entry.damage || 0) > 40) return { kind: "zoom-out" };
   if (entry.eventType === "teleport" || entry.defense?.chosenResponse === "teleport") return { kind: "camera-snap" };
-  if (entry.verdict?.breakdown?.critical || (entry.damage || 0) > 25) return { kind: "medium-shake" };
+  if (entry.verdict?.breakdown?.critical || (entry.damage || 0) > 25) return { kind: "impact-zoom" };
   if (entry.defense?.chosenResponse === "counter" || entry.defense?.chosenResponse === "block") return { kind: "dynamic-zoom" };
   if ((entry.damage || 0) > 0) return { kind: "small-shake" };
   return null;

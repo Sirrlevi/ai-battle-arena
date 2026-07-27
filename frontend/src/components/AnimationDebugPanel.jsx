@@ -14,7 +14,7 @@ const INK = "#EDEAE3";
 const GOLD = "#E8B94A";
 const VOID = "#0A0C0F";
 
-export default function AnimationDebugPanel({ open, snapshot, camera, poses, onClose }) {
+export default function AnimationDebugPanel({ open, snapshot, camera, poses, particleCount = 0, statusVisualsByFighter = {}, onClose }) {
   if (!open) return null;
 
   return (
@@ -64,18 +64,38 @@ export default function AnimationDebugPanel({ open, snapshot, camera, poses, onC
         </div>
 
         <div className="rounded p-2" style={{ background: VOID, border: `1px solid ${LINE}` }}>
-          <div style={{ color: DIM, marginBottom: 4 }}>MOVEMENT STATE</div>
+          <div style={{ color: DIM, marginBottom: 4 }}>MOVEMENT STATE / PHYSICS</div>
           <div className="grid sm:grid-cols-2 gap-2">
             {Object.entries(poses || {}).map(([key, pose]) => (
               <div key={key}>
                 <span style={{ color: GOLD }}>{key}</span>
                 <span style={{ color: DIM }}> — state: </span>
                 <span style={{ color: INK }}>{pose.state}</span>
+                <span style={{ color: DIM }}> · mode: </span>
+                <span style={{ color: INK }}>{pose.mode || "—"}</span>
                 <span style={{ color: DIM }}> · x: </span>
                 <span style={{ color: INK }}>{Math.round(pose.x)}</span>
+                <span style={{ color: DIM }}> · v: </span>
+                <span style={{ color: INK }}>({Math.round(pose.vx || 0)}, {Math.round(pose.vy || 0)})</span>
+                <span style={{ color: DIM }}> · grounded: </span>
+                <span style={{ color: INK }}>{String(pose.grounded ?? true)}</span>
               </div>
             ))}
           </div>
+        </div>
+
+        <div className="rounded p-2" style={{ background: VOID, border: `1px solid ${LINE}` }}>
+          <div style={{ color: DIM, marginBottom: 4 }}>ACTIVE EFFECTS / PARTICLE COUNT</div>
+          <div style={{ color: INK }}>Live particles: {particleCount}</div>
+          {Object.entries(statusVisualsByFighter).map(([key, visuals]) => (
+            visuals.length > 0 && (
+              <div key={key}>
+                <span style={{ color: GOLD }}>{key}</span>
+                <span style={{ color: DIM }}>: </span>
+                <span style={{ color: INK }}>{visuals.map((v) => v.label).join(", ")}</span>
+              </div>
+            )
+          ))}
         </div>
 
         <div className="rounded p-2" style={{ background: VOID, border: `1px solid ${LINE}` }}>
@@ -83,6 +103,8 @@ export default function AnimationDebugPanel({ open, snapshot, camera, poses, onC
           <div style={{ color: INK }}>
             shake: {(camera?.shakeIntensity ?? 0).toFixed(1)} · zoom-out boost: {(camera?.zoomOutBoost ?? 0).toFixed(2)} ·
             {" "}motion blur: {(camera?.motionBlur ?? 0).toFixed(2)} · snap flash: {(camera?.snapFlash ?? 0).toFixed(2)}
+            <br />
+            impact zoom: {(camera?.impactZoomBoost ?? 0).toFixed(2)} · time scale: {(camera?.timeScale ?? 1).toFixed(2)} · death desat: {(camera?.deathDesat ?? 0).toFixed(2)}
           </div>
         </div>
       </div>

@@ -11,11 +11,13 @@ const EMITTER_PROFILES = {
   dust: { count: 6, speed: 60, life: 0.4, size: 3 },
   smoke: { count: 8, speed: 30, life: 1.1, size: 6 },
   fire: { count: 10, speed: 90, life: 0.55, size: 5 },
+  ice: { count: 8, speed: 70, life: 0.6, size: 4 },
   lightning: { count: 5, speed: 260, life: 0.2, size: 3 },
   energy: { count: 8, speed: 120, life: 0.5, size: 4 },
   debris: { count: 10, speed: 140, life: 0.7, size: 5 },
   rock_fragment: { count: 8, speed: 100, life: 0.8, size: 6 },
   magic_circle: { count: 1, speed: 0, life: 0.9, size: 60, ring: true },
+  magic: { count: 9, speed: 60, life: 0.7, size: 4 },
   reality_fragment: { count: 9, speed: 80, life: 0.9, size: 5 },
   stars: { count: 7, speed: 50, life: 0.6, size: 3 },
   galaxy: { count: 12, speed: 40, life: 1.4, size: 3 },
@@ -23,6 +25,8 @@ const EMITTER_PROFILES = {
   healing: { count: 8, speed: -50, life: 0.8, size: 4 }, // negative speed = drifts upward
   aura_trail: { count: 6, speed: 20, life: 0.7, size: 5 },
   explosion_ring: { count: 1, speed: 0, life: 0.5, size: 90, ring: true },
+  shockwave: { count: 1, speed: 0, life: 0.4, size: 110, ring: true },
+  shield_sparks: { count: 6, speed: 140, life: 0.3, size: 2 },
 };
 
 let nextId = 1;
