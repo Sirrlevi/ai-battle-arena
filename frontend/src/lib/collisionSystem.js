@@ -32,3 +32,10 @@ export function projectileHitTest(projectile, targetX, targetY, radius = 34) {
 export function isOutOfArena(x, y, width, height, margin = 60) {
   return x < -margin || x > width + margin || y < -margin || y > height + margin;
 }
+
+// Phase 4D, spec section 8 ("Wall Collision", "Bounce"): reflects an
+// incoming velocity off a boundary, scaled down by `restitution` so a hard
+// knockback into the arena edge rebounds instead of just stopping dead.
+export function reflectVelocity(vx, restitution = 0.35) {
+  return -vx * restitution;
+}

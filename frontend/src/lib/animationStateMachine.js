@@ -11,8 +11,6 @@ export const STATES = [
   "hit",
   "attacking",
   "blocking",
-  "rolling",
-  "crouching",
   "jumping",
   "falling",
   "flying",
@@ -22,16 +20,12 @@ export const STATES = [
   "idle",
 ];
 
-const ROLL_LIKE_MODES = new Set(["roll", "slide", "backDash", "sideDash"]);
-
 const RULES = [
   { name: "dead", test: (ctx) => !ctx.alive },
   { name: "transforming", test: (ctx) => ctx.transformTimer > 0 },
   { name: "hit", test: (ctx) => ctx.hitTimer > 0 },
   { name: "attacking", test: (ctx) => !!ctx.attackPhase },
   { name: "blocking", test: (ctx) => ctx.blocking },
-  { name: "rolling", test: (ctx) => ROLL_LIKE_MODES.has(ctx.mode) },
-  { name: "crouching", test: (ctx) => ctx.mode === "crouch" },
   { name: "flying", test: (ctx) => ctx.mode === "fly" },
   { name: "hovering", test: (ctx) => ctx.mode === "hover" },
   { name: "jumping", test: (ctx) => !ctx.grounded && ctx.vy < 0 },

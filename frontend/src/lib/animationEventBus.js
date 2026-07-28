@@ -49,7 +49,24 @@ const ELEMENT_ANIMATION = {
   physical: null, // resolved by range/melee-variant below instead
 };
 
-const MELEE_VARIANT_ANIMATION = { punch: "Punch", kick: "Kick", slash: "Combo" };
+const MELEE_VARIANT_ANIMATION = { punch: "Punch", kick: "Kick", slash: "Combo", uppercut: "Uppercut", roundhouse: "Roundhouse" };
+
+// Phase 4D, spec section 17 ("audio event pipeline... no actual audio
+// assets required yet"). One stable cue name per animation-event type
+// this bus already produces — nothing here plays a sound, it just gives
+// every event a name a future audio layer could hang a Howler/WebAudio
+// call on. Status-effect events aren't listed here; they get a cue
+// derived from the status type itself where they're built, below.
+const SOUND_CUE = {
+  "Punch": "punch_impact", "Kick": "kick_impact", "Uppercut": "uppercut_impact", "Roundhouse": "roundhouse_impact",
+  "Combo": "combo_slash", "Fireball": "fire_cast", "Ice": "ice_cast", "Lightning": "lightning_cast",
+  "Beam": "beam_fire", "Explosion": "explosion", "Heal": "heal_chime", "Shield": "shield_raise",
+  "Transformation": "transformation_surge", "Teleport": "teleport_warp", "Summon": "summon_rise",
+  "Time Stop": "time_stop_freeze", "Reality Crack": "reality_crack", "Clone": "clone_split",
+  "Counter": "counter_clash", "Dash": "dash_whoosh", "Block": "block_thud", "Parry": "parry_ring",
+  "Charge Energy": "charge_hum", "Small Flinch": "hit_light", "Knockback": "hit_medium", "Heavy Hit": "hit_heavy",
+  "Death": "defeat_fall",
+};
 
 const EVENT_TYPE_ANIMATION = {
   healing: "Heal",
@@ -76,30 +93,8 @@ const DEFENSE_ANIMATION = {
   transformation: "Transformation",
 };
 
-// ---------- Audio Event Pipeline (spec section 17) ----------
-// "No actual audio assets are required yet" — this is purely the event
-// layer, so a future sound system just has to subscribe to the bus and
-// look up a real asset per tag instead of inventing its own event source.
-const AUDIO_TAG = {
-  Punch: "punch", Kick: "kick", Combo: "punch", Uppercut: "punch", Roundhouse: "kick",
-  Grab: "punch", Throw: "punch", Beam: "beam", Laser: "beam", Fireball: "beam", Explosion: "explosion",
-  Lightning: "beam", Ice: "beam", "Charge Energy": "charge", Transformation: "transformation",
-  Heal: "aura", Shield: "aura", Barrier: "aura", Block: "punch", Parry: "punch", Counter: "punch",
-  Teleport: "landing", Summon: "aura", "Ground Slam": "explosion", "Air Combo": "punch",
-  "Small Flinch": "punch", "Heavy Hit": "punch", Knockback: "punch", Death: "death",
-  "Reality Crack": "explosion", "Time Stop": "charge",
-};
-
-function audioTagFor(type) {
-  return AUDIO_TAG[type] || null;
-}
-
-export function audioEventsFor(animEvents) {
-  return animEvents.map((e) => ({ tag: audioTagFor(e.type), sourceEventId: e.id })).filter((e) => e.tag);
-}
-
-function makeEvent(type, category, payload = {}, source = "engine") {
-  return { id: nextEventId++, type, category, payload, source, audioTag: audioTagFor(type) };
+function makeEvent(type, category, payload = {}, source = "engine", sound = null) {
+  return { id: nextEventId++, type, category, payload, source, sound: sound || SOUND_CUE[type] || null };
 }
 
 /**
@@ -133,11 +128,11 @@ function primaryAnimationName(entry, interpreted) {
 }
 
 function cameraEventFor(entry) {
-  if (entry.result === "lethal") return { kind: "death-camera" };
-  if (entry.isUltimate) return { kind: "ultimate-camera" };
+  if (entry.result === "lethal") return { kind: "medium-shake" };
+  if (entry.isUltimate) return { kind: "large-shake" };
   if (entry.verdict?.ability?.areaOfEffect && (entry.damage || 0) > 40) return { kind: "zoom-out" };
   if (entry.eventType === "teleport" || entry.defense?.chosenResponse === "teleport") return { kind: "camera-snap" };
-  if (entry.verdict?.breakdown?.critical || (entry.damage || 0) > 25) return { kind: "impact-zoom" };
+  if (entry.verdict?.breakdown?.critical || (entry.damage || 0) > 25) return { kind: "medium-shake" };
   if (entry.defense?.chosenResponse === "counter" || entry.defense?.chosenResponse === "block") return { kind: "dynamic-zoom" };
   if ((entry.damage || 0) > 0) return { kind: "small-shake" };
   return null;
@@ -225,7 +220,7 @@ export function buildAnimationEvents(entry) {
 
   for (const applied of entry.statusApplied || []) {
     const visual = visualForStatus(applied.type);
-    if (visual) queue.push(makeEvent(visual.label, "status", { statusType: applied.type, visual }, source));
+    if (visual) queue.push(makeEvent(visual.label, "status", { statusType: applied.type, visual }, source, `status_${applied.type}`));
   }
 
   if (entry.result === "lethal") {

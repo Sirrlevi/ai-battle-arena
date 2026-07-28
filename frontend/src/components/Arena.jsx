@@ -12,7 +12,7 @@ import DamageNumber from "./DamageNumber.jsx";
 import Particle from "./Particle.jsx";
 import { ARENA_WIDTH, ARENA_HEIGHT, GROUND_Y } from "../lib/battleState.js";
 
-export default function Arena({ fighters, poses = {}, activeEffects = {}, camera, projectiles = [], damageNumbers = [], particles = [], statusVisualsByFighter = {}, terrainMarks = [], combatTierByFighter = {} }) {
+export default function Arena({ fighters, poses = {}, activeEffects = {}, camera, projectiles = [], damageNumbers = [], particles = [], statusVisualsByFighter = {}, isWinnerByFighter = {} }) {
   const cam = camera || { x: ARENA_WIDTH / 2, zoom: 1, shakeOffsetX: 0, shakeOffsetY: 0 };
   const shakeX = cam.shakeOffsetX || 0;
   const shakeY = cam.shakeOffsetY || 0;
@@ -48,14 +48,6 @@ export default function Arena({ fighters, poses = {}, activeEffects = {}, camera
 
         {/* Camera-driven scene: fighters, projectiles, damage numbers */}
         <g transform={sceneTransform}>
-          {/* Phase 4 section 9: environment destruction persists for the rest of the battle — plain SVG crack marks, driven only by the Combat Engine's own terrainDamage flag. */}
-          {terrainMarks.map((m) => (
-            <g key={m.id}>
-              <ellipse cx={m.x} cy={GROUND_Y} rx={m.size} ry={m.size * 0.28} fill="#0A0C0F" opacity={0.55} />
-              <path d={`M ${m.x - m.size * 0.6} ${GROUND_Y} L ${m.x - m.size * 0.15} ${GROUND_Y - m.size * 0.18} L ${m.x + m.size * 0.1} ${GROUND_Y} L ${m.x + m.size * 0.55} ${GROUND_Y - m.size * 0.12}`} stroke="#2a2f38" strokeWidth={1.5} fill="none" opacity={0.7} />
-            </g>
-          ))}
-
           {projectiles.map((p) => (
             <Projectile key={p.id} projectile={p} />
           ))}
@@ -68,7 +60,7 @@ export default function Arena({ fighters, poses = {}, activeEffects = {}, camera
               auraFilterId="stickmanAuraBlur"
               effectType={activeEffects[f.key] || null}
               statusVisuals={statusVisualsByFighter[f.key] || []}
-              combatTierIndex={combatTierByFighter[f.key] ?? null}
+              isWinner={isWinnerByFighter[f.key] || false}
             />
           ))}
 
@@ -84,11 +76,6 @@ export default function Arena({ fighters, poses = {}, activeEffects = {}, camera
         {/* Phase 3.95 camera-snap flash (teleport events) — outside the scene transform so it reads as a full-screen cut, not a world-space effect. */}
         {cam.snapFlash > 0 && (
           <rect x={0} y={0} width={ARENA_WIDTH} height={ARENA_HEIGHT} fill="#FFFFFF" opacity={cam.snapFlash * 0.35} />
-        )}
-
-        {/* Phase 4 death-camera desaturation overlay (spec section 11) */}
-        {cam.deathDesat > 0 && (
-          <rect x={0} y={0} width={ARENA_WIDTH} height={ARENA_HEIGHT} fill="#0A0C0F" opacity={cam.deathDesat * 0.25} />
         )}
       </svg>
     </div>

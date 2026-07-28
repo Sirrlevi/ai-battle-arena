@@ -5,7 +5,7 @@
 // offset layered onto the same follow/zoom target, so nothing about the
 // original follow behavior changes when no event is active.
 
-const SHAKE_MAGNITUDE = { "small-shake": 4, "medium-shake": 9, "large-shake": 16, "ultimate-camera": 20, "death-camera": 12, "beam-clash-camera": 14 };
+const SHAKE_MAGNITUDE = { "small-shake": 4, "medium-shake": 9, "large-shake": 16 };
 
 export function createCamera(centerX) {
   return {
@@ -13,8 +13,6 @@ export function createCamera(centerX) {
     // Phase 3.95 additions:
     shakeIntensity: 0, shakeOffsetX: 0, shakeOffsetY: 0,
     zoomOutBoost: 0, motionBlur: 0, snapFlash: 0,
-    // Phase 4 additions (spec section 11):
-    impactZoomBoost: 0, timeScale: 1, deathDesat: 0,
   };
 }
 
@@ -39,28 +37,6 @@ export function triggerCameraEvent(camera, kind) {
       camera.zoomOutBoost = Math.max(camera.zoomOutBoost, 0.12);
       camera.shakeIntensity = Math.max(camera.shakeIntensity, SHAKE_MAGNITUDE["small-shake"]);
       break;
-    // Phase 4 (spec section 11):
-    case "impact-zoom":
-      camera.impactZoomBoost = Math.max(camera.impactZoomBoost, 0.16);
-      camera.shakeIntensity = Math.max(camera.shakeIntensity, SHAKE_MAGNITUDE["medium-shake"]);
-      break;
-    case "slow-motion":
-      camera.timeScale = 0.35;
-      break;
-    case "ultimate-camera":
-      camera.zoomOutBoost = Math.max(camera.zoomOutBoost, -0.12); // zoom IN for an ultimate
-      camera.shakeIntensity = Math.max(camera.shakeIntensity, SHAKE_MAGNITUDE["ultimate-camera"]);
-      camera.timeScale = 0.5;
-      break;
-    case "death-camera":
-      camera.shakeIntensity = Math.max(camera.shakeIntensity, SHAKE_MAGNITUDE["death-camera"]);
-      camera.deathDesat = 1;
-      camera.timeScale = 0.4;
-      break;
-    case "beam-clash-camera":
-      camera.impactZoomBoost = Math.max(camera.impactZoomBoost, 0.1);
-      camera.shakeIntensity = Math.max(camera.shakeIntensity, SHAKE_MAGNITUDE["beam-clash-camera"]);
-      break;
     default:
       break;
   }
@@ -75,24 +51,20 @@ export function updateCamera(camera, fighters, arenaWidth, dt) {
 
   camera.targetX = (minX + maxX) / 2;
   // Zoom out modestly as fighters get far apart, zoom back toward 1 as they close in.
-  camera.targetZoom = Math.max(0.75, Math.min(1.05, arenaWidth / Math.max(spread + 260, arenaWidth * 0.6))) - camera.zoomOutBoost + camera.impactZoomBoost;
+  camera.targetZoom = Math.max(0.75, Math.min(1.05, arenaWidth / Math.max(spread + 260, arenaWidth * 0.6))) - camera.zoomOutBoost;
 
   const followLerp = Math.min(1, dt * 3);
   camera.x += (camera.targetX - camera.x) * followLerp;
   camera.zoom += (camera.targetZoom - camera.zoom) * followLerp;
 
-  // Decay every event-driven layer independently (using REAL dt, never the
-  // slow-motion-scaled dt App.jsx applies to gameplay) so the camera always
-  // recovers even while time itself is dilated.
+  // Decay every event-driven layer independently so overlapping events
+  // (e.g. a heavy hit during a zoom-out) blend instead of interrupting.
   camera.shakeIntensity = Math.max(0, camera.shakeIntensity - dt * 30);
   camera.shakeOffsetX = camera.shakeIntensity > 0 ? (Math.random() * 2 - 1) * camera.shakeIntensity : 0;
   camera.shakeOffsetY = camera.shakeIntensity > 0 ? (Math.random() * 2 - 1) * camera.shakeIntensity : 0;
-  camera.zoomOutBoost = camera.zoomOutBoost > 0 ? Math.max(0, camera.zoomOutBoost - dt * 0.35) : Math.min(0, camera.zoomOutBoost + dt * 0.35);
-  camera.impactZoomBoost = Math.max(0, camera.impactZoomBoost - dt * 0.5);
+  camera.zoomOutBoost = Math.max(0, camera.zoomOutBoost - dt * 0.35);
   camera.motionBlur = Math.max(0, camera.motionBlur - dt * 2.5);
   camera.snapFlash = Math.max(0, camera.snapFlash - dt * 4);
-  camera.deathDesat = Math.max(0, camera.deathDesat - dt * 0.4);
-  camera.timeScale = Math.min(1, camera.timeScale + dt * 0.8);
 
   return camera;
 }
