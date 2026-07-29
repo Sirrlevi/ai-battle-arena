@@ -13,7 +13,6 @@ export function createCamera(centerX) {
     // Phase 3.95 additions:
     shakeIntensity: 0, shakeOffsetX: 0, shakeOffsetY: 0,
     zoomOutBoost: 0, motionBlur: 0, snapFlash: 0,
-    clashFreeze: 0, // Phase 4B: >0 while a beam-clash hitstop is active (see App.jsx's frame loop)
   };
 }
 
@@ -37,12 +36,6 @@ export function triggerCameraEvent(camera, kind) {
     case "dynamic-zoom":
       camera.zoomOutBoost = Math.max(camera.zoomOutBoost, 0.12);
       camera.shakeIntensity = Math.max(camera.shakeIntensity, SHAKE_MAGNITUDE["small-shake"]);
-      break;
-    case "beam-clash":
-      // Spec section 5: "camera zoom" + "push mechanic" on collision.
-      camera.zoomOutBoost = Math.max(camera.zoomOutBoost, 0.24);
-      camera.shakeIntensity = Math.max(camera.shakeIntensity, SHAKE_MAGNITUDE["medium-shake"]);
-      camera.clashFreeze = 1;
       break;
     default:
       break;
@@ -72,7 +65,6 @@ export function updateCamera(camera, fighters, arenaWidth, dt) {
   camera.zoomOutBoost = Math.max(0, camera.zoomOutBoost - dt * 0.35);
   camera.motionBlur = Math.max(0, camera.motionBlur - dt * 2.5);
   camera.snapFlash = Math.max(0, camera.snapFlash - dt * 4);
-  camera.clashFreeze = Math.max(0, camera.clashFreeze - dt * 3);
 
   return camera;
 }
