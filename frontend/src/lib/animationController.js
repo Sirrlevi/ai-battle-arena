@@ -37,6 +37,30 @@ export function triggerTransformation(anim) {
   anim.transformTimer = TRANSFORM_PAUSE_DURATION;
 }
 
+// Phase 4B, spec section 4: prefers the Combat Engine's own element
+// classification (entry.verdict.ability.element — authoritative when a
+// verdict exists) over the actionInterpreter keyword guess, extending
+// Phase 3.95's "engine beats guesswork" rule to projectile visuals, which
+// were 100% keyword-guessed even when a full verdict was available. Falls
+// back to the keyword guess whenever there's no verdict or no element
+// this table covers — never a hard failure, same as every other fallback
+// in this codebase.
+const ELEMENT_PROJECTILE_VARIANT = { fire: "fireball", ice: "ice_shard", lightning: "lightning_bolt", void: "void_sphere" };
+
+function resolveProjectileVariant(entry, keywordVariant) {
+  const element = entry?.verdict?.ability?.element;
+  if (element === "gravity") {
+    // "gravity" covers both spec's "Gravity Orb" and "Black Hole" — the
+    // element alone doesn't distinguish them, so for purely cosmetic
+    // purposes (same spirit as the melee-variant keyword guess) a nudge
+    // from the ability's own flavor text picks between the two looks.
+    const text = `${entry.ability_name || ""} ${entry.description || ""}`.toLowerCase();
+    return text.includes("black hole") || text.includes("singularity") ? "black_hole" : "gravity_orb";
+  }
+  if (element && ELEMENT_PROJECTILE_VARIANT[element]) return ELEMENT_PROJECTILE_VARIANT[element];
+  return keywordVariant;
+}
+
 /**
  * Kicks off the visual sequence for a resolved turn. `intent` comes from
  * actionInterpreter; `opponentAnim` is the other fighter's live anim state
@@ -49,8 +73,16 @@ export function queueAction(anim, intent, opponentAnim, entry) {
   }
 
   if (intent.category === "projectile") {
-    anim.attackPhase = { variant: intent.variant, phase: "windup", t: 0 };
-    anim.pendingImpact = { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, projectileVariant: intent.variant, spawnProjectile: true };
+    const variant = resolveProjectileVariant(entry, intent.variant);
+    anim.attackPhase = { variant, phase: "windup", t: 0 };
+    // Phase 4B, spec section 5: the one reachable "two beams, one
+    // exchange" case — see spawnBeamClashPair's doc comment in
+    // projectileManager.js for why this is the only scenario the battle
+    // loop's strict turn alternation can actually produce.
+    const isBeamClash = entry.defense?.chosenResponse === "counter" && (entry.counterDamage || 0) > 0;
+    anim.pendingImpact = isBeamClash
+      ? { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, spawnBeamClash: true, projectileVariant: variant, counterVariant: "energy", counterDamage: entry.counterDamage }
+      : { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, projectileVariant: variant, spawnProjectile: true };
     return;
   }
 
