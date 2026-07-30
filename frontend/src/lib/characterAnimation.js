@@ -153,12 +153,30 @@ function poseGait(worldX, facing, seed, intensity) {
   p.armR.upper = 10 - legL * 0.55;
   p.armL.lower = 16;
   p.armR.lower = 16;
-  p.footL = -legL * 0.3;
-  p.footR = -legR * 0.3;
+  // Foot-plant: while a leg is on its "back swing" (moving opposite the
+  // travel direction, i.e. still in ground contact rolling through the
+  // step) the ankle rotates through a flatter, ground-hugging range;
+  // during forward recovery it lifts more freely. Same sine already
+  // driving the leg, just read as a stance/swing split instead of one
+  // flat multiplier, so the foot doesn't clip forward through the ground
+  // on the push-off half of the stride.
+  const stanceL = Math.cos(phase) * facing < 0;
+  const stanceR = Math.cos(phase + Math.PI) * facing < 0;
+  p.footL = -legL * (stanceL ? 0.55 : 0.22);
+  p.footR = -legR * (stanceR ? 0.55 : 0.22);
   p.chestBob = -Math.abs(Math.sin(phase)) * 1.6 * intensity;
   p.headBob = p.chestBob * 0.5;
   p.chestLean = -3 * intensity;
-  p.waistLean = seed.lean * 0.3;
+  // Hips and shoulders counter-rotate through the stride (classic
+  // contralateral gait — trailing hip drops back as the lead leg swings
+  // forward, shoulders twist the opposite way to cancel angular momentum).
+  // Expressed here as extra waist/chest lean split by facing so it reads
+  // correctly mirrored, scaled down at low intensity so a slow walk
+  // doesn't over-twist.
+  const hipTwist = Math.sin(phase) * 3.2 * intensity * facing;
+  const shoulderTwist = -Math.sin(phase) * 2.2 * intensity * facing;
+  p.waistLean = seed.lean * 0.3 + hipTwist;
+  p.chestLean += shoulderTwist;
   p.stance = seed.stanceWidth;
   return p;
 }

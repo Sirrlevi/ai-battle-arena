@@ -153,9 +153,29 @@ export default function Stickman({ fighter, pose, auraFilterId, effectType = nul
   const landPulse = useLandPulse(state, now);
   const afterImages = useAfterImages(x, y, speed, now); // gated on `alive` at the render site below, not here — hooks must always run unconditionally
   const targetPose = computeSkeletonPose({ fighter, state, attackPhase, facing, alive, hitMagnitude, isWinner, now, worldX: x, speed, landPulse });
-  // Strikes and hit-reactions blend fast (near-instant) so impact stays
-  // crisp; ordinary movement blends slower for smoothness.
-  const blendRate = attackPhase?.phase === "strike" ? 0.7 : state === "hit" ? 0.55 : 0.24;
+  // BUGFIX (movement-animation root cause): a single low blend rate was
+  // applied to every pose channel regardless of how fast that pose was
+  // already changing on its own. poseGait's leg/arm angles are a sin() of
+  // worldX, so their oscillation frequency scales directly with travel
+  // speed — at "dash" speed (640px/s, what every melee approach actually
+  // uses) the gait cycles roughly every ~150ms. The old flat 0.24 rate is
+  // an exponential low-pass filter with a cutoff well below that
+  // oscillation frequency, so it was smoothing the swing amplitude almost
+  // all the way back to zero every frame: the skeleton kept translating
+  // across the screen (the outer transform) while its limbs stayed near
+  // their rest pose — exactly the "sliding without proper movement
+  // animation" symptom. 0.24 is still correct for what it was tuned for —
+  // suppressing pop when the pose SOURCE jumps discontinuously (idle <->
+  // attack <-> hit state swaps). Locomotion doesn't jump like that;
+  // poseGait is already continuous, so it needs a rate fast enough not to
+  // filter out its own signal, not one tuned for hiding a different kind
+  // of pop that was never present here.
+  const blendRate =
+    attackPhase?.phase === "strike" ? 0.7
+    : state === "hit" ? 0.55
+    : state === "running" ? 0.85
+    : state === "walking" ? 0.6
+    : 0.24;
   const skel = useSmoothedPose(targetPose, blendRate);
 
   const seed = personalitySeed(fighter);
