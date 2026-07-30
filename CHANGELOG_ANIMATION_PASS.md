@@ -90,12 +90,78 @@ Both changes only touch `poseGait`; every other pose function (attacks,
 hit reactions, idle, flying, victory, death, etc.) is byte-for-byte
 unchanged.
 
+## 3. Knockback weight scales with damage
+
+**File:** `frontend/src/lib/animationController.js`
+
+Knockback push (`applyHitReaction`) used to be one flat speed (260px/s)
+for every hit regardless of damage — a 5-damage jab and a 40-damage
+haymaker shoved the target back identically, which reads as weightless.
+Replaced with `KNOCKBACK_BASE (170) + damage * KNOCKBACK_PER_DAMAGE (3.4)`,
+capped at `KNOCKBACK_MAX (520)` so a single hit still can't fling a
+fighter across the whole arena in one frame. A light jab now barely
+budges the target; a heavy hit sends them sliding back hard. Still purely
+a cosmetic push on `motion.vx` — doesn't touch hp, damage, or any combat
+resolution, same as before.
+
+## 4. Landing weight: dust, camera shake, and impact-scaled squash
+
+**Files:** `frontend/src/lib/movementController.js`,
+`frontend/src/lib/characterAnimation.js`, `frontend/src/components/Stickman.jsx`,
+`frontend/src/App.jsx`
+
+The engine already tracked `motion.justLanded` and `motion.justHitWall`
+(Phase 4D) but nothing was watching them for anything visual — they only
+fed a sound-cue name. Kept the existing pooled particle system and camera
+controller completely as-is and just gave these two events the same
+treatment every other impact in the game already gets:
+
+- Added `motion.landSpeed` — a cosmetic-only snapshot of `|vy|` taken at
+  the instant of touchdown, before it's zeroed. Doesn't change physics;
+  it's read-only, the same pattern as the existing `justStepped`/
+  `justHitWall` flags.
+- A landing now emits a `dust` particle burst at the fighter's feet
+  (`lib/particleSystem.js`'s existing pooled emitter — no new profile
+  added), scaled low/medium/high by how hard the landing actually was. A
+  genuinely hard landing (`landSpeed > 500`) also triggers the existing
+  `small-shake` camera event.
+- A wall bounce now emits a `debris` burst at torso height and the same
+  small camera shake.
+- The landing-squash crouch (already existed via `landPulse`) now scales
+  its depth by `landSpeed` too, via `computeSkeletonPose`'s new optional
+  `landSpeed` param — a step off a small hop reads as a light dip, a
+  knockdown-height fall reads as a real impact, clamped to a sane
+  0.55x–1.7x range so it can never look broken.
+
+No new particle types, no new camera-event kinds, no backend changes —
+every piece here reuses machinery that already existed and was already
+being used for other effects; this just connects two previously-silent
+events to it.
+
 ## Try it
 
 Watch a fighter dash in to melee range — legs should now visibly cycle
 through the approach instead of the figure sliding on static legs. Watch
 the return-to-home walk after a strike resolves — should read as a clear
-walk cycle with a slight hip sway, not idle-with-translation.
+walk cycle with a slight hip sway, not idle-with-translation. Land a light
+jab vs. a heavy hit back-to-back — the knockback distance should now
+visibly differ. Watch a fighter get knocked into a launch and come back
+down — a hard landing should kick up a bigger dust puff, a bigger squash,
+and a small camera shake; a light hop landing should barely register.
+Knock a fighter into the arena wall — should now kick up debris and a
+small shake instead of silently stopping.
+
+## Files touched this pass
+
+- `frontend/src/components/Stickman.jsx` — blend-rate bugfix, `landSpeed` threaded through
+- `frontend/src/lib/characterAnimation.js` — gait foot-plant/hip-shoulder rotation, landing-squash scaling
+- `frontend/src/lib/movementController.js` — added cosmetic `landSpeed` field
+- `frontend/src/lib/animationController.js` — damage-scaled knockback
+- `frontend/src/App.jsx` — landing/wall-impact particles + camera shake wiring, `landSpeed` threaded into `poses`
+
+Nothing in `backend/`, no API routes, no deployment config, no character/
+powers/ability/battle-logic files, and no UI outside these five files was
+touched.
 
 ## What wasn't touched in this pass
 

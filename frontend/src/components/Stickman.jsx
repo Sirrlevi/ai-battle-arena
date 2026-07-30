@@ -125,7 +125,7 @@ function useAfterImages(x, y, speed, now) {
 
 export default function Stickman({ fighter, pose, auraFilterId, effectType = null, statusVisuals = [], isWinner = false }) {
   const { name, hp, maxHp = 100, energy, maxEnergy = 100, color, alive } = fighter;
-  const { x = 0, y = 0, facing = 1, state = "idle", attackPhase = null, flashing = false, hitMagnitude = 0, combo = 0 } = pose || {};
+  const { x = 0, y = 0, facing = 1, state = "idle", attackPhase = null, flashing = false, hitMagnitude = 0, combo = 0, landSpeed = 0 } = pose || {};
 
   const now = Date.now();
   const hpPct = Math.max(0, Math.min(1, hp / maxHp));
@@ -152,7 +152,7 @@ export default function Stickman({ fighter, pose, auraFilterId, effectType = nul
   const speed = useSpeed(x, now);
   const landPulse = useLandPulse(state, now);
   const afterImages = useAfterImages(x, y, speed, now); // gated on `alive` at the render site below, not here — hooks must always run unconditionally
-  const targetPose = computeSkeletonPose({ fighter, state, attackPhase, facing, alive, hitMagnitude, isWinner, now, worldX: x, speed, landPulse });
+  const targetPose = computeSkeletonPose({ fighter, state, attackPhase, facing, alive, hitMagnitude, isWinner, now, worldX: x, speed, landPulse, landSpeed });
   // BUGFIX (movement-animation root cause): a single low blend rate was
   // applied to every pose channel regardless of how fast that pose was
   // already changing on its own. poseGait's leg/arm angles are a sin() of

@@ -323,6 +323,20 @@ export default function App() {
       // turn's animation events (see the "turn:resolved" subscriber below).
       if (anim.motion.justStepped) newFrameCues.push("footstep");
       if (anim.motion.justLanded) newFrameCues.push("landing_thud");
+      // Animation pass: landings/wall-hits previously had a sound cue and a
+      // motion-state flag but no visual payoff at all — reusing the same
+      // pooled particle emitter and camera-shake path every other impact in
+      // the game already goes through, just gated on these two motion
+      // events instead of a combat-engine verdict.
+      if (anim.motion.justLanded) {
+        const heavy = anim.motion.landSpeed > 500;
+        emitParticles(particleSystemRef.current, "dust", anim.motion.x, anim.motion.y, { intensity: heavy ? "high" : anim.motion.landSpeed > 250 ? "medium" : "low" });
+        if (heavy) triggerCameraEvent(cameraRef.current, "small-shake");
+      }
+      if (anim.motion.justHitWall) {
+        emitParticles(particleSystemRef.current, "debris", anim.motion.x, anim.motion.y + TORSO_OFFSET_Y, { intensity: "medium" });
+        triggerCameraEvent(cameraRef.current, "small-shake");
+      }
       // Phase 4C, spec section 16 "Motion Blur": a real dash/knockback
       // speed, not a guess — finally gives cameraController's long-dormant
       // motionBlur field something that actually triggers it.
@@ -677,9 +691,9 @@ export default function App() {
         anim
           ? {
               x: anim.motion.x, y: anim.motion.y, facing: anim.motion.facing, state: anim.state, attackPhase: anim.attackPhase, flashing: anim.flashTimer > 0, hitMagnitude: anim.lastHitDamage || 0,
-              vx: anim.motion.vx, vy: anim.motion.vy, grounded: anim.motion.grounded, mode: anim.motion.mode, justHitWall: anim.motion.justHitWall, combo: anim.comboCount || 0,
+              vx: anim.motion.vx, vy: anim.motion.vy, grounded: anim.motion.grounded, mode: anim.motion.mode, justHitWall: anim.motion.justHitWall, combo: anim.comboCount || 0, landSpeed: anim.motion.landSpeed || 0,
             }
-          : { x: f.position.x, y: f.position.y, facing: 1, state: "idle", attackPhase: null, flashing: false, hitMagnitude: 0, vx: 0, vy: 0, grounded: true, mode: "idle", justHitWall: false, combo: 0 },
+          : { x: f.position.x, y: f.position.y, facing: 1, state: "idle", attackPhase: null, flashing: false, hitMagnitude: 0, vx: 0, vy: 0, grounded: true, mode: "idle", justHitWall: false, combo: 0, landSpeed: 0 },
       ];
     })
   );

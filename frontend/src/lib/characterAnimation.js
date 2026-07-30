@@ -494,7 +494,7 @@ function poseVictory(seed, now) {
  * }
  */
 export function computeSkeletonPose(ctx) {
-  const { fighter, state, attackPhase, facing = 1, alive = true, hitMagnitude = 0, isWinner = false, now = 0, worldX = 0, speed = 0, landPulse = 0 } = ctx;
+  const { fighter, state, attackPhase, facing = 1, alive = true, hitMagnitude = 0, isWinner = false, now = 0, worldX = 0, speed = 0, landPulse = 0, landSpeed = 0 } = ctx;
   const seed = personalitySeed(fighter);
 
   let pose;
@@ -520,7 +520,12 @@ export function computeSkeletonPose(ctx) {
   }
 
   if (landPulse > 0 && alive) {
-    pose = { ...pose, crouch: Math.max(pose.crouch, landPulse * 0.75) };
+    // Animation pass: squash depth now scales with how hard the landing
+    // actually was (landSpeed, px/s of fall velocity at touchdown) instead
+    // of every landing getting the same fixed dip — a step off a small hop
+    // reads as light, a knockdown-height fall reads as a real impact.
+    const impactScale = clamp(landSpeed / 650, 0.55, 1.7);
+    pose = { ...pose, crouch: Math.max(pose.crouch, landPulse * 0.75 * impactScale) };
   }
   return pose;
 }

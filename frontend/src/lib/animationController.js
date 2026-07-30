@@ -13,7 +13,16 @@ const ATTACK_DURATIONS = { windup: 0.16, strike: 0.12, recovery: 0.26 };
 const HIT_REACT_DURATION = 0.25;
 const FLASH_DURATION = 0.18;
 const BLOCK_DURATION = 0.6;
-const KNOCKBACK_SPEED = 260;
+// Animation pass: knockback used to be one flat speed regardless of how
+// much damage actually landed, so a 5-damage jab and a 40-damage haymaker
+// shoved the target back identically — reads as weightless. Now a base
+// speed (close to the old flat 260 at a mid-range hit) plus a
+// per-damage-point component, capped so a single hit can never fling a
+// fighter clear across the arena in one frame. Purely a cosmetic push
+// (motion.vx), same as before — never touches hp/damage/combat resolution.
+const KNOCKBACK_BASE = 170;
+const KNOCKBACK_PER_DAMAGE = 3.4;
+const KNOCKBACK_MAX = 520;
 const TRANSFORM_PAUSE_DURATION = 0.9; // spec section 7: "pause combat briefly"
 
 export function createAnimState(x, y, groundY) {
@@ -126,7 +135,8 @@ export function applyHitReaction(anim, fromX, damage = 0) {
   anim.flashTimer = FLASH_DURATION;
   anim.lastHitDamage = damage; // Phase 4A: see field comment in createAnimState above
   const dir = anim.motion.x >= fromX ? 1 : -1;
-  anim.motion.vx = dir * KNOCKBACK_SPEED;
+  const knockbackSpeed = Math.min(KNOCKBACK_MAX, KNOCKBACK_BASE + damage * KNOCKBACK_PER_DAMAGE);
+  anim.motion.vx = dir * knockbackSpeed;
 }
 
 /**

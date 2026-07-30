@@ -53,6 +53,7 @@ export function createMotionState(x, y, groundY) {
     justLanded: false, // Phase 4D: true for exactly the frame grounded flips false -> true
     justStepped: false, // Phase 4D: true for exactly the frame a footstep cue should fire
     justHitWall: false, // Phase 4D: true for exactly the frame an arena-bound bounce occurred
+    landSpeed: 0, // Animation pass: |vy| at the instant of the most recent landing, cosmetic only — read by the renderer to scale landing-dust intensity and squash depth by how hard the landing actually was, never by physics/combat logic
   };
 }
 
@@ -167,6 +168,7 @@ export function updateMotion(motion, dt, bounds) {
       motion.y += motion.vy * dt;
       if (isGrounded(motion.y, motion.groundY)) {
         motion.y = motion.groundY;
+        motion.landSpeed = Math.abs(motion.vy); // snapshot the impact speed before it's zeroed below — cosmetic only, see field comment in createMotionState
         motion.vy = 0;
         motion.grounded = true;
         if (cmd && cmd.type === "jump") done = true;
