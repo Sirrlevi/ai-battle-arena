@@ -66,6 +66,15 @@ function resolveProjectileVariant(entry, keywordVariant) {
  * actionInterpreter; `opponentAnim` is the other fighter's live anim state
  * (read for positioning, never mutated here).
  */
+// Phase 4F (animation polish pass, inspired by a reference stick-fighter
+// project's canvas renderer): every pendingImpact now also carries the
+// ability's element (falls back to "physical") purely so the renderer can
+// theme hit-feedback color by element instead of one flat red — never
+// read by any combat/damage logic.
+function elementOf(entry) {
+  return entry?.verdict?.ability?.element || "physical";
+}
+
 export function queueAction(anim, intent, opponentAnim, entry) {
   if (intent.category === "block") {
     anim.blockTimer = BLOCK_DURATION;
@@ -74,15 +83,15 @@ export function queueAction(anim, intent, opponentAnim, entry) {
 
   if (intent.category === "projectile") {
     const variant = resolveProjectileVariant(entry, intent.variant);
-    anim.attackPhase = { variant, phase: "windup", t: 0 };
+    anim.attackPhase = { variant, phase: "windup", t: 0, power: entry.damage || 0 };
     // Phase 4B, spec section 5: the one reachable "two beams, one
     // exchange" case — see spawnBeamClashPair's doc comment in
     // projectileManager.js for why this is the only scenario the battle
     // loop's strict turn alternation can actually produce.
     const isBeamClash = entry.defense?.chosenResponse === "counter" && (entry.counterDamage || 0) > 0;
     anim.pendingImpact = isBeamClash
-      ? { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, spawnBeamClash: true, projectileVariant: variant, counterVariant: "energy", counterDamage: entry.counterDamage }
-      : { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, projectileVariant: variant, spawnProjectile: true };
+      ? { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, element: elementOf(entry), spawnBeamClash: true, projectileVariant: variant, counterVariant: "energy", counterDamage: entry.counterDamage }
+      : { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, element: elementOf(entry), projectileVariant: variant, spawnProjectile: true };
     return;
   }
 
@@ -99,8 +108,8 @@ export function queueAction(anim, intent, opponentAnim, entry) {
     } else {
       issueCommand(anim.motion, "run", approachX);
     }
-    anim.attackPhase = { variant: "punch", phase: "approach", t: 0 };
-    anim.pendingImpact = { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result };
+    anim.attackPhase = { variant: "punch", phase: "approach", t: 0, power: entry.damage || 0 };
+    anim.pendingImpact = { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, element: elementOf(entry) };
     return;
   }
 
@@ -108,8 +117,8 @@ export function queueAction(anim, intent, opponentAnim, entry) {
   const dir = opponentAnim.motion.x >= anim.motion.x ? 1 : -1;
   const approachX = opponentAnim.motion.x - dir * MELEE_RANGE;
   issueCommand(anim.motion, "dash", approachX);
-  anim.attackPhase = { variant: intent.variant, phase: "approach", t: 0 };
-  anim.pendingImpact = { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result };
+  anim.attackPhase = { variant: intent.variant, phase: "approach", t: 0, power: entry.damage || 0 };
+  anim.pendingImpact = { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, element: elementOf(entry) };
 }
 
 export function applyHitReaction(anim, fromX, damage = 0) {

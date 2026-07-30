@@ -154,9 +154,10 @@ any battle *does* — only how it looks.
 ## Scoping notes (please read)
 
 - **Update:** 4B, 4C, and 4D have all shipped — see `PHASE_4B_NOTES.md`,
-  `PHASE_4C_NOTES.md`, and `PHASE_4D_NOTES.md`. Only 4E (environment
-  destruction) is still proposed/not started, exactly where Phase 3.95
-  left it.
+  `PHASE_4C_NOTES.md`, and `PHASE_4D_NOTES.md`. A separate, unplanned
+  `PHASE_4F_NOTES.md` (animation polish, inspired by a second reference
+  project) also landed. Only 4E (environment destruction) is still
+  proposed/not started, exactly where Phase 3.95 left it.
 - The Debug Panel was intentionally left untouched this phase — the new
   pose/hit-magnitude data isn't surfaced there yet. Natural fit for
   whichever sub-phase adds the "physics state"/"particle count" fields

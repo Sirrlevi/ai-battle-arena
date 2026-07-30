@@ -21,7 +21,7 @@
 
 import { useRef, useLayoutEffect } from "react";
 import { effectEmoji } from "../lib/battleEngine.js";
-import { RIG, computeSkeletonPose, computeAuraStyle, personalitySeed, lerpPose } from "../lib/characterAnimation.js";
+import { RIG, computeSkeletonPose, computeAuraStyle, personalitySeed, lerpPose, clamp } from "../lib/characterAnimation.js";
 
 const FOOT_Y = 0;
 
@@ -132,7 +132,22 @@ export default function Stickman({ fighter, pose, auraFilterId, effectType = nul
   const energyPct = Math.max(0, Math.min(1, energy / maxEnergy));
   const emoji = effectEmoji(effectType) || (state === "blocking" ? "🛡️" : null);
   const transforming = state === "transforming";
-  const strokeColor = flashing ? "#FFFFFF" : transforming ? "#F5E663" : color;
+  // Phase 4F: sustained full-body recolor for hit/block reactions, inspired
+  // by a reference stick-fighter project's approach (it recolors the whole
+  // figure red/blue for the reaction's duration rather than only flashing).
+  // The brief white impact flash still takes priority for its own instant
+  // — this adds a real read AFTER the flash fades, for the rest of the
+  // reaction, scaled by actual damage rather than a flat color.
+  const hitT = clamp(hitMagnitude / 45, 0, 1);
+  const strokeColor = flashing
+    ? "#FFFFFF"
+    : state === "hit"
+      ? blendHex(color, "#FF4A4A", 0.32 + hitT * 0.4)
+      : state === "blocking"
+        ? blendHex(color, "#4488FF", 0.38)
+        : transforming
+          ? "#F5E663"
+          : color;
 
   const speed = useSpeed(x, now);
   const landPulse = useLandPulse(state, now);
@@ -181,6 +196,19 @@ export default function Stickman({ fighter, pose, auraFilterId, effectType = nul
   const auraColor = alive ? blendHex(color, "#E4443B", aura.danger * 0.6) : color;
   const auraRx = 46 * aura.scale;
   const auraRy = 78 * aura.scale;
+
+  // Phase 4F: a bright dot at the exact striking limb during the active
+  // strike window — inspired by the reference project's impact indicator,
+  // timed to the same "strike" sub-phase animationController.js already
+  // tracks (no new timer, no invented data).
+  const MELEE_IMPACT_VARIANTS = new Set(["punch", "kick", "uppercut", "roundhouse", "slash"]);
+  const KICK_VARIANTS = new Set(["kick", "roundhouse"]);
+  const isStriking = alive && state === "attacking" && attackPhase?.phase === "strike" && MELEE_IMPACT_VARIANTS.has(attackPhase.variant);
+  const impactPoint = isStriking
+    ? KICK_VARIANTS.has(attackPhase.variant)
+      ? (facing >= 0 ? footTipR : footTipL)
+      : (facing >= 0 ? handR : handL)
+    : null;
 
   return (
     <g transform={`translate(${x}, ${y + skel.hop}) rotate(${rotation}) scale(${transformScale})`} opacity={opacity}>
@@ -268,6 +296,14 @@ export default function Stickman({ fighter, pose, auraFilterId, effectType = nul
 
       {/* Head */}
       <circle cx={head.x} cy={head.y} r={RIG.HEAD_R} fill="none" stroke={strokeColor} strokeWidth={3} />
+
+      {/* Phase 4F: impact-frame flash at the striking limb, active strike window only */}
+      {impactPoint && (
+        <>
+          <circle cx={impactPoint.x} cy={impactPoint.y} r={9} fill="#FFFFFF" opacity={0.55} />
+          <circle cx={impactPoint.x} cy={impactPoint.y} r={4} fill="#FFFFFF" />
+        </>
+      )}
 
       {/* Effect / status indicator */}
       {emoji && alive && (

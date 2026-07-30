@@ -232,16 +232,22 @@ function poseHovering(seed, now) {
   return p;
 }
 
-function poseBlocking(seed) {
+function poseBlocking(seed, now) {
   const p = basePose();
   const raise = -66 + seed.guardHeight;
-  p.armL.upper = raise;
-  p.armR.upper = raise;
+  // Phase 4F: a small continuous push/jitter while guarding — a static
+  // guard pose reads as passive; a fighter actively absorbing hits reads
+  // as alive. Inspired by a reference stick-fighter project's block state,
+  // which oscillates continuously rather than holding one fixed pose.
+  const push = Math.sin(now / 90) * 1.6;
+  p.armL.upper = raise + push * 0.4;
+  p.armR.upper = raise + push * 0.4;
   p.armL.lower = 42;
   p.armR.lower = 42;
   p.legL.lower = 16;
   p.legR.lower = 16;
-  p.chestLean = 4;
+  p.chestLean = 4 + push;
+  p.waistLean = push * 0.5;
   p.crouch = 0.3;
   p.stance = seed.stanceWidth * 1.1;
   return p;
@@ -364,7 +370,22 @@ function poseAttacking(attackPhase, facing, seed, now) {
   if (!attackPhase) return poseIdle(seed, now);
   const gen = MELEE_VARIANTS[attackPhase.variant] || poseCast;
   const prog = phaseProgress(attackPhase);
-  return gen(attackPhase.phase, prog, facing >= 0 ? 1 : -1);
+  const pose = gen(attackPhase.phase, prog, facing >= 0 ? 1 : -1);
+  // Phase 4F: a real 90-damage haymaker should visibly read as heavier
+  // than a 10-damage jab, not just differ in which animation clip plays —
+  // inspired by a reference stick-fighter project scaling its own punch
+  // reach directly off `strength`. Rather than rescale every variant's
+  // per-joint angles individually (real risk of subtly breaking five
+  // already-tested pose functions), this amplifies the torso-lean/crouch
+  // signal every attack pose already sets — reads as "more body behind
+  // the hit" without touching arm/leg arithmetic at all.
+  const powerT = clamp((attackPhase.power || 0) / 45, 0, 1);
+  if (powerT > 0) {
+    pose.chestLean *= 1 + powerT * 0.45;
+    pose.waistLean *= 1 + powerT * 0.35;
+    pose.crouch = Math.min(0.5, pose.crouch * (1 + powerT * 0.3));
+  }
+  return pose;
 }
 
 // ---------- reaction poses ----------
@@ -372,8 +393,13 @@ function poseHit(seed, hitMagnitude, facing, now) {
   const p = basePose();
   const t = clamp((hitMagnitude || 0) / 45, 0, 1); // continuous light -> heavy, spec section 7
   const away = facing >= 0 ? -1 : 1;
-  p.chestLean = mix(-9, -30, t) * away * -1;
-  p.headTilt = mix(6, 20, t) * away * -1;
+  // Phase 4F: a small continuous reel/shake for the whole hit reaction,
+  // not just a static staggered pose — inspired by the reference project's
+  // stunFrames-driven oscillation, which keeps a stunned fighter looking
+  // like they're recoiling rather than frozen mid-flinch.
+  const shake = Math.sin(now / 45) * 2.2 * t;
+  p.chestLean = mix(-9, -30, t) * away * -1 + shake;
+  p.headTilt = mix(6, 20, t) * away * -1 + shake * 1.3;
   p.waistLean = mix(-4, -14, t) * away * -1;
   p.armL.upper = mix(20, 55, t);
   p.armR.upper = mix(-20, -55, t);
@@ -463,7 +489,7 @@ export function computeSkeletonPose(ctx) {
       case "transforming": pose = poseTransforming(seed, now); break;
       case "hit": pose = poseHit(seed, hitMagnitude, facing, now); break;
       case "attacking": pose = poseAttacking(attackPhase, facing, seed, now); break;
-      case "blocking": pose = poseBlocking(seed); break;
+      case "blocking": pose = poseBlocking(seed, now); break;
       case "flying": pose = poseFlying(seed, now, facing >= 0 ? 1 : -1); break;
       case "hovering": pose = poseHovering(seed, now); break;
       case "jumping": pose = poseJumping(seed); break;

@@ -25,6 +25,25 @@ const PANEL = "#12151A";
 const LINE = "#23282f";
 const DIM = "#7C8590";
 const HIT = "#E4443B";
+// Phase 4F: element-colored damage numbers, inspired by a reference
+// stick-fighter project's zone-colored hit feedback (head/body/limb) —
+// our game doesn't track hit zones, but it does track element, which is
+// the natural analog here. Falls back to the flat HIT red for "physical"
+// or anything unrecognized, so behavior is unchanged wherever no element
+// is known.
+const ELEMENT_DAMAGE_COLOR = {
+  fire: "#FF7A45",
+  ice: "#7DC8E8",
+  lightning: "#FFF6B0",
+  void: "#B46BFF",
+  gravity: "#9B7BFF",
+  light: "#FFE8A3",
+  poison: "#8FD62E",
+  physical: HIT,
+};
+function damageColorFor(element) {
+  return ELEMENT_DAMAGE_COLOR[element] || HIT;
+}
 const GOLD = "#E8B94A";
 
 const PROVIDERS = [
@@ -232,12 +251,12 @@ export default function App() {
         fromAX: actorAnim.motion.x, fromAY: actorAnim.motion.y + TORSO_OFFSET_Y,
         toAX: targetAnim.motion.x, toAY: targetAnim.motion.y + TORSO_OFFSET_Y,
         ownerAKey: actorAnim.key, targetAKey: targetKey,
-        payloadA: { damage: impact.damage, result: impact.result },
+        payloadA: { damage: impact.damage, result: impact.result, element: impact.element },
         variantB: impact.counterVariant,
         fromBX: targetAnim.motion.x, fromBY: targetAnim.motion.y + TORSO_OFFSET_Y,
         toBX: actorAnim.motion.x, toBY: actorAnim.motion.y + TORSO_OFFSET_Y,
         ownerBKey: targetKey, targetBKey: actorAnim.key,
-        payloadB: { damage: impact.counterDamage, result: "hit" },
+        payloadB: { damage: impact.counterDamage, result: "hit", element: "physical" },
         onClash: (cx, cy) => {
           triggerCameraEvent(cameraRef.current, "beam-clash");
           emitParticles(particleSystemRef.current, "energy", cx, cy, { intensity: "high" });
@@ -257,7 +276,7 @@ export default function App() {
         toY: targetAnim.motion.y + TORSO_OFFSET_Y,
         ownerKey: actorAnim.key,
         targetKey,
-        payload: { damage: impact.damage, result: impact.result },
+        payload: { damage: impact.damage, result: impact.result, element: impact.element },
         bounds: MOTION_BOUNDS,
       });
       return;
@@ -265,7 +284,7 @@ export default function App() {
 
     if (impact.result === "hit" || impact.result === "lethal") {
       applyHitReaction(targetAnim, actorAnim.motion.x, impact.damage);
-      pushDamageNumber(targetAnim.motion.x, targetAnim.motion.y + TORSO_OFFSET_Y, impact.damage, HIT);
+      pushDamageNumber(targetAnim.motion.x, targetAnim.motion.y + TORSO_OFFSET_Y, impact.damage, damageColorFor(impact.element));
       triggerImpactFrame(impact.damage, impact.result);
     }
   }
@@ -319,7 +338,7 @@ export default function App() {
           const targetAnim = animRef.current[p.targetKey];
           if (targetAnim) {
             applyHitReaction(targetAnim, p.fromX, p.payload.damage);
-            pushDamageNumber(p.toX, p.toY, p.payload.damage, HIT);
+            pushDamageNumber(p.toX, p.toY, p.payload.damage, damageColorFor(p.payload.element));
             triggerImpactFrame(p.payload.damage, p.payload.result);
           }
         }
