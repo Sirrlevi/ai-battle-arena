@@ -5,7 +5,7 @@ import { createFighter, resetFighterCombatState, computeSpawnPositions, ARENA_WI
 import { resolveAction, tickStatus } from "./lib/battleEngine.js";
 import { interpretAction } from "./lib/actionInterpreter.js";
 import { createAnimState, queueAction, updateAnimation, applyHitReaction, triggerTransformation, registerTurnOutcome } from "./lib/animationController.js";
-import { createProjectileManager, spawnProjectile, updateProjectiles } from "./lib/projectileManager.js";
+import { createProjectileManager, spawnProjectile, spawnBeamClashPair, updateProjectiles } from "./lib/projectileManager.js";
 import { createCamera, updateCamera, triggerCameraEvent } from "./lib/cameraController.js";
 import { createEventBus, on, emit, buildAnimationEvents, buildDebugSnapshot, cameraEventFor, particleEventsFor } from "./lib/animationEventBus.js";
 import { createParticleSystem, emitParticles, updateParticles, livingParticles } from "./lib/particleSystem.js";
@@ -38,6 +38,15 @@ const PROVIDERS = [
 ];
 
 const MOTION_BOUNDS = { minX: 40, maxX: ARENA_WIDTH - 40 };
+// Phase 4B, spec section 4 ("Particle Trail"). Maps each projectile
+// variant to the closest existing particle type from particleSystem.js's
+// catalog — "arrow" and "lightning_bolt" are deliberately left out
+// (a physical arrow doesn't need a magic trail, and the bolt's own
+// zigzag shape already reads as instantaneous rather than trailing).
+const TRAIL_PARTICLE = {
+  laser: "energy", energy: "energy", fireball: "fire", ice_shard: "ice",
+  gravity_orb: "energy", void_sphere: "energy", black_hole: "energy", orb: "energy",
+};
 const TORSO_OFFSET_Y = -80; // where projectiles launch from / aim at, relative to a fighter's feet
 let dmgNumberId = 1;
 
@@ -196,9 +205,48 @@ export default function App() {
     setTimeout(() => setDamageNumbers((prev) => prev.filter((d) => d.id !== id)), 950);
   }
 
+  // Phase 4C, spec section 16 "Impact Frames": a very brief real pause
+  // (much shorter than beam-clash's) plus a modest flash on a genuinely
+  // heavy or lethal hit — reuses hitstopRef and snapFlash exactly as they
+  // already work for beam-clash/teleport, just smaller amounts, rather
+  // than building a separate freeze-frame/flash mechanism.
+  function triggerImpactFrame(damage, result) {
+    if (result === "lethal" || (damage || 0) > 40) {
+      hitstopRef.current = Math.max(hitstopRef.current, 0.045);
+      cameraRef.current.snapFlash = Math.max(cameraRef.current.snapFlash, 0.6);
+    }
+  }
+
   function handleImpact(actorAnim, targetKey, impact) {
     const targetAnim = animRef.current[targetKey];
     if (!targetAnim) return;
+
+    if (impact.spawnBeamClash) {
+      // Phase 4B, spec section 5. See spawnBeamClashPair's doc comment in
+      // projectileManager.js and resolveProjectileVariant's in
+      // animationController.js for why this specific trigger (a ranged
+      // attack met with a "counter" response) is the one beam-clash
+      // scenario this turn-based battle loop can actually produce.
+      spawnBeamClashPair(projectileManagerRef.current, {
+        variantA: impact.projectileVariant,
+        fromAX: actorAnim.motion.x, fromAY: actorAnim.motion.y + TORSO_OFFSET_Y,
+        toAX: targetAnim.motion.x, toAY: targetAnim.motion.y + TORSO_OFFSET_Y,
+        ownerAKey: actorAnim.key, targetAKey: targetKey,
+        payloadA: { damage: impact.damage, result: impact.result },
+        variantB: impact.counterVariant,
+        fromBX: targetAnim.motion.x, fromBY: targetAnim.motion.y + TORSO_OFFSET_Y,
+        toBX: actorAnim.motion.x, toBY: actorAnim.motion.y + TORSO_OFFSET_Y,
+        ownerBKey: targetKey, targetBKey: actorAnim.key,
+        payloadB: { damage: impact.counterDamage, result: "hit" },
+        onClash: (cx, cy) => {
+          triggerCameraEvent(cameraRef.current, "beam-clash");
+          emitParticles(particleSystemRef.current, "energy", cx, cy, { intensity: "high" });
+          emitParticles(particleSystemRef.current, "explosion_ring", cx, cy, { intensity: "medium" });
+          hitstopRef.current = 0.12;
+        },
+      });
+      return;
+    }
 
     if (impact.spawnProjectile) {
       spawnProjectile(projectileManagerRef.current, {
@@ -210,6 +258,7 @@ export default function App() {
         ownerKey: actorAnim.key,
         targetKey,
         payload: { damage: impact.damage, result: impact.result },
+        bounds: MOTION_BOUNDS,
       });
       return;
     }
@@ -217,6 +266,7 @@ export default function App() {
     if (impact.result === "hit" || impact.result === "lethal") {
       applyHitReaction(targetAnim, actorAnim.motion.x, impact.damage);
       pushDamageNumber(targetAnim.motion.x, targetAnim.motion.y + TORSO_OFFSET_Y, impact.damage, HIT);
+      triggerImpactFrame(impact.damage, impact.result);
     }
   }
 
@@ -225,12 +275,28 @@ export default function App() {
   useAnimationFrame((dt) => {
     if (phase === "setup" || phase === "paused") return;
 
+    // Phase 4B, spec section 5 ("Pause movement"): a real freeze-frame,
+    // not a slow-motion fudge — while active, nothing below advances at
+    // all, only the render tick, so the pause is actually visible.
+    if (hitstopRef.current > 0) {
+      hitstopRef.current = Math.max(0, hitstopRef.current - dt);
+      setRenderTick((t) => t + 1);
+      return;
+    }
+
+    // Phase 4C, spec section 11 "Slow Motion": camera.timeScale eases back
+    // to 1 in REAL time (updateCamera below always gets the real dt, so a
+    // slow-mo beat has a consistent real-world duration regardless of how
+    // slow it makes everything else look) — only the simulation itself
+    // (fighters/projectiles/particles) runs on the scaled dt.
+    const simDt = dt * (cameraRef.current.timeScale ?? 1);
+
     const currentRoster = stateRef.current;
     const newFrameCues = [];
     for (const f of currentRoster) {
       const anim = animRef.current[f.key];
       if (!anim) continue;
-      const { impact, state } = updateAnimation(anim, dt, MOTION_BOUNDS, anim.homeX, f.alive);
+      const { impact, state } = updateAnimation(anim, simDt, MOTION_BOUNDS, anim.homeX, f.alive);
       anim.state = state;
       if (impact) handleImpact(anim, impact.targetKey, impact);
       // Phase 4D, spec section 17: the two cue types with no resolved turn
@@ -238,21 +304,34 @@ export default function App() {
       // turn's animation events (see the "turn:resolved" subscriber below).
       if (anim.motion.justStepped) newFrameCues.push("footstep");
       if (anim.motion.justLanded) newFrameCues.push("landing_thud");
+      // Phase 4C, spec section 16 "Motion Blur": a real dash/knockback
+      // speed, not a guess — finally gives cameraController's long-dormant
+      // motionBlur field something that actually triggers it.
+      if (Math.abs(anim.motion.vx) > 480) cameraRef.current.motionBlur = Math.max(cameraRef.current.motionBlur, 0.5);
     }
     if (newFrameCues.length) audioCuesRef.current = [...audioCuesRef.current, ...newFrameCues].slice(-40);
 
-    updateProjectiles(projectileManagerRef.current, dt, (p) => {
-      if (p.payload?.result === "hit" || p.payload?.result === "lethal") {
-        const targetAnim = animRef.current[p.targetKey];
-        if (targetAnim) {
-          applyHitReaction(targetAnim, p.fromX, p.payload.damage);
-          pushDamageNumber(p.toX, p.toY, p.payload.damage, HIT);
+    updateProjectiles(
+      projectileManagerRef.current,
+      simDt,
+      (p) => {
+        if (p.payload?.result === "hit" || p.payload?.result === "lethal") {
+          const targetAnim = animRef.current[p.targetKey];
+          if (targetAnim) {
+            applyHitReaction(targetAnim, p.fromX, p.payload.damage);
+            pushDamageNumber(p.toX, p.toY, p.payload.damage, HIT);
+            triggerImpactFrame(p.payload.damage, p.payload.result);
+          }
         }
+      },
+      (p) => {
+        const trailType = TRAIL_PARTICLE[p.variant];
+        if (trailType) emitParticles(particleSystemRef.current, trailType, p.x, p.y, { intensity: "low" });
       }
-    });
+    );
 
     updateCamera(cameraRef.current, currentRoster.map((f) => ({ alive: f.alive, motion: animRef.current[f.key]?.motion })), ARENA_WIDTH, dt);
-    updateParticles(particleSystemRef.current, dt);
+    updateParticles(particleSystemRef.current, simDt);
 
     setRenderTick((t) => t + 1);
   }, true);

@@ -27,8 +27,9 @@ export default function Particle({ particle }) {
   const opacity = Math.max(0, Math.min(1, lifeRatio));
 
   if (particle.ring) {
-    const radius = particle.size * (1 - lifeRatio * 0.4);
-    return <circle cx={particle.x} cy={particle.y} r={radius} fill="none" stroke={color} strokeWidth={3} opacity={opacity * 0.8} />;
+    const radius = particle.expand ? particle.size * (1 - lifeRatio) : particle.size * (1 - lifeRatio * 0.4);
+    const strokeWidth = particle.expand ? 1.5 + lifeRatio * 4 : 3;
+    return <circle cx={particle.x} cy={particle.y} r={Math.max(1, radius)} fill="none" stroke={color} strokeWidth={strokeWidth} opacity={opacity * 0.8} />;
   }
 
   return <circle cx={particle.x} cy={particle.y} r={particle.size * Math.max(0.2, lifeRatio)} fill={color} opacity={opacity * 0.85} />;

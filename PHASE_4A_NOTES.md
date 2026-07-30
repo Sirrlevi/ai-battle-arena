@@ -153,9 +153,10 @@ any battle *does* — only how it looks.
 
 ## Scoping notes (please read)
 
-- **Update:** 4D shipped — see `PHASE_4D_NOTES.md`. 4B, 4C, and 4E are
-  still proposed/not started: projectiles, beam clash, extra camera modes,
-  and the VFX suite are all still exactly where Phase 3.95 left them.
+- **Update:** 4B, 4C, and 4D have all shipped — see `PHASE_4B_NOTES.md`,
+  `PHASE_4C_NOTES.md`, and `PHASE_4D_NOTES.md`. Only 4E (environment
+  destruction) is still proposed/not started, exactly where Phase 3.95
+  left it.
 - The Debug Panel was intentionally left untouched this phase — the new
   pose/hit-magnitude data isn't surfaced there yet. Natural fit for
   whichever sub-phase adds the "physics state"/"particle count" fields

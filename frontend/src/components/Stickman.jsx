@@ -99,6 +99,30 @@ function useLandPulse(state, now) {
   return elapsed >= 0 && elapsed < LAND_PULSE_MS ? 1 - elapsed / LAND_PULSE_MS : 0;
 }
 
+// Phase 4C, spec section 16 "After Images" / "Trail Effects": a short
+// rolling history of world positions while moving fast, rendered as a few
+// faded simplified silhouettes behind the current figure — not duplicate
+// skeletons (four full FK chains every frame for a purely decorative trail
+// isn't worth the render cost, and visually four overlapping stick figures
+// reads as clutter, not a clean motion trail). Same StrictMode-safe
+// read/compute/write-via-effect shape as useSmoothedPose above.
+function useAfterImages(x, y, speed, now) {
+  const ref = useRef([]);
+  const history = ref.current;
+  let next = history;
+  if (speed > 420) {
+    const last = history[history.length - 1];
+    if (!last || Math.hypot(x - last.x, y - last.y) > 16) {
+      next = [...history, { x, y, t: now }].slice(-4);
+    }
+  }
+  next = next.filter((h) => now - h.t < 220);
+  useLayoutEffect(() => {
+    ref.current = next;
+  });
+  return next;
+}
+
 export default function Stickman({ fighter, pose, auraFilterId, effectType = null, statusVisuals = [], isWinner = false }) {
   const { name, hp, maxHp = 100, energy, maxEnergy = 100, color, alive } = fighter;
   const { x = 0, y = 0, facing = 1, state = "idle", attackPhase = null, flashing = false, hitMagnitude = 0, combo = 0 } = pose || {};
@@ -112,6 +136,7 @@ export default function Stickman({ fighter, pose, auraFilterId, effectType = nul
 
   const speed = useSpeed(x, now);
   const landPulse = useLandPulse(state, now);
+  const afterImages = useAfterImages(x, y, speed, now); // gated on `alive` at the render site below, not here — hooks must always run unconditionally
   const targetPose = computeSkeletonPose({ fighter, state, attackPhase, facing, alive, hitMagnitude, isWinner, now, worldX: x, speed, landPulse });
   // Strikes and hit-reactions blend fast (near-instant) so impact stays
   // crisp; ordinary movement blends slower for smoothness.
@@ -191,6 +216,34 @@ export default function Stickman({ fighter, pose, auraFilterId, effectType = nul
           fill="none" stroke={v.color} strokeWidth={1.5} strokeDasharray="4 4" opacity={0.55}
         />
       ))}
+
+      {/* Phase 4C, spec section 16 "After Images" — simplified faded
+          silhouettes at recent fast-movement positions, drawn behind the
+          current figure. See useAfterImages' comment for why these are a
+          simple shape, not duplicate skeletons. */}
+      {alive && afterImages.slice(0, -1).map((h, i, arr) => {
+        const ageT = Math.min(1, (now - h.t) / 220);
+        const op = (1 - ageT) * 0.18 * ((i + 1) / (arr.length + 1));
+        return (
+          <g key={`ghost-${h.t}`} transform={`translate(${h.x - x}, ${h.y - y})`} opacity={op}>
+            <ellipse cx={0} cy={hipY - 40} rx={17} ry={46} fill={color} />
+            <circle cx={0} cy={hipY - 90} r={RIG.HEAD_R} fill={color} />
+          </g>
+        );
+      })}
+
+      {/* Phase 4C, spec section 16 "Speed Lines" — radiating opposite the
+          travel direction, opacity/reach scaled by real speed. */}
+      {alive && speed > 380 && (
+        <g opacity={Math.min(1, (speed - 380) / 300)}>
+          {[0, 1, 2].map((i) => {
+            const yOff = hipY - 20 - i * 30;
+            const len = 24 + i * 7;
+            const xBase = -facing * 30;
+            return <line key={i} x1={xBase} y1={yOff} x2={xBase - facing * len} y2={yOff} stroke={color} strokeWidth={2} strokeLinecap="round" opacity={0.5 - i * 0.12} />;
+          })}
+        </g>
+      )}
 
       {/* ---------- Skeleton (spec section 1) ---------- */}
       {/* Legs (drawn first so the torso/arms overlap them at the hip, as before) */}
