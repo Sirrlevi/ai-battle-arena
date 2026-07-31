@@ -101,7 +101,7 @@ function useLandPulse(state, now) {
 
 export default function Stickman({ fighter, pose, auraFilterId, effectType = null, statusVisuals = [], isWinner = false }) {
   const { name, hp, maxHp = 100, energy, maxEnergy = 100, color, alive } = fighter;
-  const { x = 0, y = 0, facing = 1, state = "idle", attackPhase = null, flashing = false, hitMagnitude = 0, combo = 0, teleportAlpha = 1 } = pose || {};
+  const { x = 0, y = 0, facing = 1, state = "idle", attackPhase = null, flashing = false, hitMagnitude = 0, combo = 0, teleportAlpha = 1, hitStagger = 0 } = pose || {};
 
   const now = Date.now();
   const hpPct = Math.max(0, Math.min(1, hp / maxHp));
@@ -121,7 +121,7 @@ export default function Stickman({ fighter, pose, auraFilterId, effectType = nul
   const seed = personalitySeed(fighter);
   const aura = computeAuraStyle(fighter, seed);
 
-  const rotation = alive ? 0 : 90;
+  const rotation = alive ? hitStagger : 90;
   const opacity = (alive ? 1 : 0.4) * teleportAlpha;
   const transformScale = transforming ? 1.08 : 1;
   const hipY = RIG.HIP_Y + skel.crouch * 14;

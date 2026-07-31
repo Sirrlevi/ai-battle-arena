@@ -138,7 +138,60 @@ did not touch that. What this fixes is purely the *look*: connected beam
 instead of a bullet, for however long the existing action already lasts
 on screen.
 
-## Files touched this session
+## 7. Hand-to-hand combat — punches and kicks now actually land (`frontend/src/lib/animationController.js`, `characterAnimation.js` unchanged, `Stickman.jsx`)
+
+**Two separate root causes were stacked on top of each other here — both fixed:**
+
+**(a) Reach vs. distance mismatch.** Every melee variant (punch, kick,
+slash, uppercut, roundhouse) shared one flat approach distance —
+`MELEE_RANGE = 92px` — that the attacker would dash to before swinging.
+But actually working out how far a strike extends from the rig geometry
+already defined in `characterAnimation.js` (`RIG.UPPER_ARM` + `RIG.LOWER_ARM`
++ `RIG.HAND_R` for arm strikes ≈ 52px from the fighter's root at full
+extension; `RIG.UPPER_LEG` + `RIG.LOWER_LEG` + `RIG.FOOT_LEN` for leg
+strikes ≈ 68.5px) showed arm strikes stopping roughly 35-40px *short* of
+the target at that distance — the fist was extending into empty air well
+before reaching the opponent's body. Replaced the flat range with a
+per-variant reach table (`punch/slash/uppercut: 56px`, `kick/roundhouse:
+72px`) computed from that same geometry plus a small overlap margin, so
+the dash-in now stops close enough that the strike's own extension
+actually lands on the defender's silhouette.
+
+**(b) Impact timing.** Separately — and this turned out to be the bigger
+one — the damage/hit-reaction/knockback was firing at the *very start* of
+the strike phase, which is the exact pose the windup ends on: fist still
+cocked back, not yet swung forward at all. So the defender would flinch
+and get knocked back before the attacker's arm had moved. Reworked
+`updateAnimation` so the impact now fires partway through the strike
+phase, timed per-variant to when that variant's own pose math (in
+`characterAnimation.js`) is at or near peak forward reach — worked out
+directly from each pose function's angle formulas (e.g. punch/slash/kick/
+roundhouse all sweep monotonically toward their most-extended angle right
+at the end of the strike keyframe; uppercut's arm sweeps *through*
+horizontal partway in and keeps rising afterward, so its peak is earlier
+— solved algebraically from its own `mix()` keyframe). A safety net still
+fires the impact at phase-end if a slow frame somehow skips past the
+timed trigger, so a hit can never be silently dropped.
+
+**Bonus — a bit of "ragdoll" weight on top:** added a brief whole-body
+stagger rotation on hit (`hitStaggerDegrees`), scaled by damage and
+decaying back to upright over the existing hit-react window — the
+character now visibly gets knocked off-balance in the direction of the
+hit, not just the joint-level flinch pose it had before. This isn't a
+physics simulation (nothing in this renderer is — it's all hand-authored
+forward-kinematics, same as everything else here), just an authored decay
+curve layered on top of the existing knockback velocity, which was
+already going through the normal friction/deceleration physics every
+other motion does.
+
+**What I did not do:** add an actual physics engine or true simulated
+ragdoll (joints falling under gravity/collision independent of authored
+poses). That would mean a new dependency and a real architecture change,
+not a polish pass — the fixes above address the actual symptom you
+described ("punches thrown in the air, don't land on each other") at its
+real root cause (distance + timing), without it.
+
+## Files touched across this session
 `frontend/src/App.jsx`, `frontend/src/lib/movementController.js`,
 `frontend/src/lib/actionInterpreter.js`, `frontend/src/lib/animationController.js`,
 `frontend/src/components/Stickman.jsx`, `frontend/src/components/Projectile.jsx`,

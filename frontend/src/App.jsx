@@ -4,7 +4,7 @@ import { createSession, setSessionKeys, generateCharacter as apiGenerateCharacte
 import { createFighter, resetFighterCombatState, computeSpawnPositions, ARENA_WIDTH, GROUND_Y } from "./lib/battleState.js";
 import { resolveAction, tickStatus } from "./lib/battleEngine.js";
 import { interpretAction } from "./lib/actionInterpreter.js";
-import { createAnimState, queueAction, updateAnimation, applyHitReaction, triggerTransformation, registerTurnOutcome } from "./lib/animationController.js";
+import { createAnimState, queueAction, updateAnimation, applyHitReaction, triggerTransformation, registerTurnOutcome, hitStaggerDegrees } from "./lib/animationController.js";
 import { createProjectileManager, spawnProjectile, spawnBeamClashPair, updateProjectiles } from "./lib/projectileManager.js";
 import { createCamera, updateCamera, triggerCameraEvent } from "./lib/cameraController.js";
 import { createEventBus, on, emit, buildAnimationEvents, buildDebugSnapshot, cameraEventFor, particleEventsFor } from "./lib/animationEventBus.js";
@@ -780,9 +780,9 @@ export default function App() {
           ? {
               x: anim.motion.x, y: anim.motion.y, facing: anim.motion.facing, state: anim.state, attackPhase: anim.attackPhase, flashing: anim.flashTimer > 0, hitMagnitude: anim.lastHitDamage || 0,
               vx: anim.motion.vx, vy: anim.motion.vy, grounded: anim.motion.grounded, mode: anim.motion.mode, justHitWall: anim.motion.justHitWall, combo: anim.comboCount || 0,
-              teleportAlpha: anim.motion.teleportAlpha,
+              teleportAlpha: anim.motion.teleportAlpha, hitStagger: hitStaggerDegrees(anim),
             }
-          : { x: f.position.x, y: f.position.y, facing: 1, state: "idle", attackPhase: null, flashing: false, hitMagnitude: 0, vx: 0, vy: 0, grounded: true, mode: "idle", justHitWall: false, combo: 0, teleportAlpha: 1 },
+          : { x: f.position.x, y: f.position.y, facing: 1, state: "idle", attackPhase: null, flashing: false, hitMagnitude: 0, vx: 0, vy: 0, grounded: true, mode: "idle", justHitWall: false, combo: 0, teleportAlpha: 1, hitStagger: 0 },
       ];
     })
   );

@@ -8,7 +8,35 @@
 import { createMotionState, updateMotion, issueCommand } from "./movementController.js";
 import { resolveAnimationState } from "./animationStateMachine.js";
 
-const MELEE_RANGE = 92;
+// Contact distance per melee-style variant, derived from the actual rig
+// geometry in characterAnimation.js (RIG.UPPER_ARM/LOWER_ARM/HAND_R for
+// arm strikes ≈ 6.5 + 22 + 20 + 3.4 ≈ 52px from a fighter's root at
+// near-full extension; RIG.UPPER_LEG/LOWER_LEG/FOOT_LEN for leg strikes ≈
+// 4.5 + 28 + 25 + 11 ≈ 68.5px) plus a small overlap margin so the limb
+// visually lands ON the defender's silhouette rather than stopping just
+// short of it. Previously every variant shared one flat 92px range tuned
+// for none of them — arm strikes in particular stopped ~35-40px short of
+// the target, which is what read as "punching the air."
+const MELEE_REACH = { punch: 56, slash: 56, uppercut: 56, kick: 72, roundhouse: 72 };
+const DEFAULT_MELEE_REACH = 56; // arm-based default, for categories (teleport/movement) that always land on an arm-style pose (poseCast/posePunch)
+function reachFor(variant) {
+  return MELEE_REACH[variant] ?? DEFAULT_MELEE_REACH;
+}
+
+// How far into the STRIKE phase (0-1) the actual impact fires, timed to
+// when characterAnimation.js's pose for that variant is at or near its
+// peak forward reach — worked out from the same joint-angle formulas as
+// the pose functions themselves (posePunch/poseSlash/poseKick/
+// poseRoundhouse all sweep monotonically toward their most-extended angle
+// at the very end of the strike keyframe, so 0.85 catches them just before
+// that; poseUppercut's arm sweeps THROUGH horizontal (its actual peak
+// horizontal reach) partway through and then keeps rising past it toward
+// a finishing angle well above horizontal, so its peak is earlier — solved
+// from mix(-70, 168, prog) = 90 -> prog ≈ 0.672). Previously impact fired
+// at prog 0 of strike — literally the cocked-back end of the windup pose,
+// before the limb had moved toward the target at all.
+const MELEE_IMPACT_FRACTION = { punch: 0.85, slash: 0.85, kick: 0.85, roundhouse: 0.9, uppercut: 0.67 };
+const DEFAULT_IMPACT_FRACTION = 0.8;
 const ATTACK_DURATIONS = { windup: 0.16, strike: 0.12, recovery: 0.26 };
 const HIT_REACT_DURATION = 0.25;
 const FLASH_DURATION = 0.18;
@@ -20,13 +48,14 @@ export function createAnimState(x, y, groundY) {
   return {
     motion: createMotionState(x, y, groundY),
     attackPhase: null, // { variant, phase: 'windup'|'strike'|'recovery', t }
-    pendingImpact: null, // { targetKey, damage, result } fired at the start of 'strike'
+    pendingImpact: null, // { targetKey, damage, result } fired partway through 'strike', near peak reach — see MELEE_IMPACT_FRACTION
     blockTimer: 0,
     hitTimer: 0,
     flashTimer: 0,
     transformTimer: 0, // Phase 3.95: >0 while a transformation animation is playing
     statusVisuals: [], // Phase 3.95: active status-effect visuals (see statusVisuals.js), refreshed each turn
     lastHitDamage: 0, // Phase 4A: cosmetic only — read by characterAnimation.js to scale hit-reaction pose (light flinch vs heavy stagger). Never read by any damage/combat logic.
+    hitDir: 0, // which way (1 | -1) they were last knocked — cosmetic only, feeds hitStaggerDegrees below
     comboCount: 0, // Phase 4D, spec section 13: consecutive-turn hit streak for THIS fighter's own actions, cosmetic only (badge + minor pose flourish) — never read by any damage/combat logic.
     homeX: x,
   };
@@ -120,11 +149,11 @@ export function queueAction(anim, intent, opponentAnim, entry) {
     const text = `${entry.ability_name || ""} ${entry.description || ""}`.toLowerCase();
     let destX;
     if (text.includes("behind")) {
-      destX = opponentAnim.motion.x + dir * (MELEE_RANGE + 24);
+      destX = opponentAnim.motion.x + dir * (DEFAULT_MELEE_REACH + 24);
     } else if ((text.includes("retreat") || text.includes("away") || text.includes("distance")) && !text.includes("close")) {
       destX = anim.motion.x - dir * 180;
     } else {
-      destX = opponentAnim.motion.x - dir * MELEE_RANGE;
+      destX = opponentAnim.motion.x - dir * DEFAULT_MELEE_REACH;
     }
     anim.motion.teleportVariant = resolveTeleportVariant(entry);
     issueCommand(anim.motion, "teleport", destX, anim.motion.y);
@@ -146,7 +175,7 @@ export function queueAction(anim, intent, opponentAnim, entry) {
     // as an attack in the battle engine — move with the requested style,
     // then land the hit at contact range just like melee.
     const dir = opponentAnim.motion.x >= anim.motion.x ? 1 : -1;
-    const approachX = opponentAnim.motion.x - dir * MELEE_RANGE;
+    const approachX = opponentAnim.motion.x - dir * DEFAULT_MELEE_REACH;
     if (intent.variant === "jump") {
       issueCommand(anim.motion, "jump");
     } else if (intent.variant === "fly" || intent.variant === "hover") {
@@ -161,18 +190,39 @@ export function queueAction(anim, intent, opponentAnim, entry) {
 
   // melee (default)
   const dir = opponentAnim.motion.x >= anim.motion.x ? 1 : -1;
-  const approachX = opponentAnim.motion.x - dir * MELEE_RANGE;
+  const approachX = opponentAnim.motion.x - dir * reachFor(intent.variant);
   issueCommand(anim.motion, "dash", approachX);
   anim.attackPhase = { variant: intent.variant, phase: "approach", t: 0 };
   anim.pendingImpact = { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result };
 }
+
+// Max whole-body stagger rotation (degrees) on the heaviest hits — decays
+// to 0 as hitTimer counts down, giving a brief "knocked off balance"
+// impulse-and-settle on top of the joint-level flinch pose in
+// characterAnimation.js's poseHit. Not a real physics simulation (nothing
+// here is), just an authored decay curve in the same spirit as everything
+// else in this file.
+const MAX_HIT_STAGGER_DEGREES = 22;
 
 export function applyHitReaction(anim, fromX, damage = 0) {
   anim.hitTimer = HIT_REACT_DURATION;
   anim.flashTimer = FLASH_DURATION;
   anim.lastHitDamage = damage; // Phase 4A: see field comment in createAnimState above
   const dir = anim.motion.x >= fromX ? 1 : -1;
+  anim.hitDir = dir; // which way they were knocked — see hitStaggerDegrees below
   anim.motion.vx = dir * KNOCKBACK_SPEED;
+}
+
+/**
+ * Degrees to rotate the whole character this frame, on top of its normal
+ * pose — a quick stagger in the knockback direction that eases back to
+ * upright as anim.hitTimer runs out. 0 once the hit-react window ends.
+ */
+export function hitStaggerDegrees(anim) {
+  if (!anim.hitTimer || anim.hitTimer <= 0) return 0;
+  const t = anim.hitTimer / HIT_REACT_DURATION; // 1 -> 0 over the reaction window
+  const magnitude = Math.max(0.3, Math.min(1, (anim.lastHitDamage || 0) / 45));
+  return (anim.hitDir || 0) * magnitude * MAX_HIT_STAGGER_DEGREES * t;
 }
 
 /**
@@ -196,9 +246,10 @@ export function registerTurnOutcome(anim, landedHit) {
 
 /**
  * Advances one fighter's animation by dt. Returns an "impact" event
- * ({targetKey, damage, result, spawnProjectileFrom}) at most once, exactly
- * when the strike phase begins — the caller (App.jsx) uses that to apply
- * the hit reaction to the defender and/or spawn a projectile.
+ * ({targetKey, damage, result, spawnProjectileFrom}) at most once, timed to
+ * when the strike pose is at or near peak forward reach (see
+ * MELEE_IMPACT_FRACTION) — the caller (App.jsx) uses that to apply the hit
+ * reaction to the defender and/or spawn a projectile.
  */
 export function updateAnimation(anim, dt, bounds, homeReturnX, alive = true) {
   updateMotion(anim.motion, dt, bounds);
@@ -220,17 +271,38 @@ export function updateAnimation(anim, dt, bounds, homeReturnX, alive = true) {
     } else {
       ap.t += dt;
       const dur = ATTACK_DURATIONS[ap.phase] ?? 0.2;
+
+      // Fire the impact when the pose is actually at (or near) its peak
+      // forward reach, not at the phase boundary — see
+      // MELEE_IMPACT_FRACTION's comment above for why this specific
+      // fraction per variant. This is what makes the hit-reaction/damage/
+      // particles land in sync with the fist or foot actually arriving,
+      // instead of the moment it's still cocked back in the windup pose.
+      if (ap.phase === "strike" && anim.pendingImpact) {
+        const frac = MELEE_IMPACT_FRACTION[ap.variant] ?? DEFAULT_IMPACT_FRACTION;
+        if (ap.t >= dur * frac) {
+          impact = anim.pendingImpact;
+          anim.pendingImpact = null;
+        }
+      }
+
       if (ap.t >= dur) {
         if (ap.phase === "windup") {
           ap.phase = "strike";
           ap.t = 0;
+        } else if (ap.phase === "strike") {
+          ap.phase = "recovery";
+          ap.t = 0;
+          // Safety net: a big dt (lag spike) could in principle jump ap.t
+          // past the fractional threshold above AND past `dur` in the
+          // same call, in which case the block above already consumed
+          // pendingImpact and this is a no-op — the null-check is what
+          // makes that safe. If it somehow never fired, fire it now
+          // rather than losing the hit entirely.
           if (anim.pendingImpact) {
             impact = anim.pendingImpact;
             anim.pendingImpact = null;
           }
-        } else if (ap.phase === "strike") {
-          ap.phase = "recovery";
-          ap.t = 0;
           // Return to spawn position after the exchange.
           issueCommand(anim.motion, "walk", homeReturnX ?? anim.homeX);
         } else {
