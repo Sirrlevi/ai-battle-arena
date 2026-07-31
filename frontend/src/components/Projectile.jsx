@@ -29,10 +29,23 @@ export default function Projectile({ projectile }) {
   const variant = projectile.variant;
 
   if (variant === "laser") {
+    // A beam should read as connected light between the shooter and the
+    // target, not a small object flying through the air — so this draws
+    // the FULL path every frame (world coordinates, no per-frame
+    // translate/rotate needed since the line itself doesn't move), with a
+    // near-instant reveal from source to target rather than tracking
+    // projectile.x/y like every other point-projectile variant below.
+    const t = projectile.duration > 0 ? Math.min(1, projectile.elapsed / projectile.duration) : 1;
+    const revealT = Math.min(1, t / 0.2); // reaches full length almost immediately, then holds
+    const headX = projectile.fromX + (projectile.toX - projectile.fromX) * revealT;
+    const headY = projectile.fromY + (projectile.toY - projectile.fromY) * revealT;
     return (
-      <g transform={`translate(${projectile.x}, ${projectile.y}) rotate(${angle})`}>
-        <line x1={-22} y1={0} x2={22} y2={0} stroke={style.glow} strokeWidth={9} strokeLinecap="round" opacity={0.25} />
-        <line x1={-22} y1={0} x2={22} y2={0} stroke={style.fill} strokeWidth={4} strokeLinecap="round" opacity={0.9} />
+      <g>
+        <line x1={projectile.fromX} y1={projectile.fromY} x2={headX} y2={headY} stroke={style.glow} strokeWidth={12} strokeLinecap="round" opacity={0.3} />
+        <line x1={projectile.fromX} y1={projectile.fromY} x2={headX} y2={headY} stroke={style.glow} strokeWidth={6} strokeLinecap="round" opacity={0.55} />
+        <line x1={projectile.fromX} y1={projectile.fromY} x2={headX} y2={headY} stroke={style.fill} strokeWidth={2.4} strokeLinecap="round" opacity={0.95} />
+        <circle cx={headX} cy={headY} r={7} fill={style.fill} opacity={0.9} />
+        <circle cx={headX} cy={headY} r={13} fill={style.glow} opacity={0.35} />
       </g>
     );
   }

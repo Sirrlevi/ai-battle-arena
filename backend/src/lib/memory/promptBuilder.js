@@ -30,6 +30,16 @@ export function buildTurnSystemPrompt({ fighterName, combatStyle, personality, w
       `known powers: ${combatProfile.knownPowers?.length ? combatProfile.knownPowers.join(", ") : "none notable"}.` +
       `${combatProfile.weaknesses?.length ? ` Your weaknesses: ${combatProfile.weaknesses.join(", ")}.` : ""}`
     : "";
+  const statsClause =
+    authorityMode === "engine"
+      ? `You can see your own AND your opponent's live HP, energy, mana, stamina, shield, cooldowns, and status effects ` +
+        `— both sides, every turn — in the "world_state" of the user message. Weigh them before choosing: press the ` +
+        `advantage when your resources or position beat theirs, play safer or defensively when they don't, and factor ` +
+        `in what's already on cooldown for both of you. Never just repeat a strong-sounding move out of habit — the ` +
+        `choice should follow from the actual numbers in front of you, not be random. `
+      : `You can see your own and your opponent's HP and energy each turn (the "you" and "opponent" fields of the user ` +
+        `message). Weigh them before choosing — press an advantage, play safer when you're behind — rather than ` +
+        `picking an action at random. `;
   return (
     `You are ${fighterName}, a combatant in a turn-based fictional battle arena. ` +
     `Combat style: ${combatStyle || "unspecified"}. Personality: ${personality || "unspecified"}. ` +
@@ -37,9 +47,8 @@ export function buildTurnSystemPrompt({ fighterName, combatStyle, personality, w
     `Stay true to this personality for the entire battle — it must not drift turn to turn. ` +
     `${AUTHORITY_CLAUSE[authorityMode] || AUTHORITY_CLAUSE.engine}${profileClause} ` +
     `Every ability should imply a cost or a weakness and should not be reused every single turn — prefer creativity over repetition. ` +
-    `You can see your own and your opponent's HP, energy, mana, stamina, cooldowns, and status effects each turn in the ` +
-    `"world_state" of the user message — use them. Do not declare an ability you cannot afford or that is on cooldown; ` +
-    `pick something you can actually do this turn. ` +
+    `${statsClause}` +
+    `Do not declare an ability you cannot afford or that is on cooldown; pick something you can actually do this turn. ` +
     `Current goal: ${goal}.${strategyHint ? ` Strategic notes: ${strategyHint}` : ""} ` +
     `Respond with ONLY a JSON object, no prose, no markdown fences. Schema: ` +
     `{"thought":string,"action":"Attack"|"Defend"|"Special","ability_name":string,"description":string,"target":"Enemy",` +

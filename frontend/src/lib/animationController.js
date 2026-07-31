@@ -61,6 +61,30 @@ function resolveProjectileVariant(entry, keywordVariant) {
   return keywordVariant;
 }
 
+// Teleport visual flavor: which of the vanish/arrive particle looks (see
+// App.jsx's TELEPORT_PARTICLES) reads as this specific teleport, picked the
+// same way resolveProjectileVariant above picks a projectile look — engine
+// element first, ability flavor text as a fallback, "arcane" if neither says
+// anything more specific.
+const TELEPORT_ELEMENT_VARIANT = { fire: "fire", ice: "ice", lightning: "lightning", void: "shadow" };
+const TELEPORT_KEYWORD_VARIANT = [
+  { variant: "lightning", words: ["thunder", "lightning", "electric", "static", "spark"] },
+  { variant: "fire", words: ["fire", "flame", "blaze", "ember"] },
+  { variant: "wind", words: ["wind", "gust", "gale", "air current"] },
+  { variant: "shadow", words: ["shadow", "dark", "void", "umbral", "night"] },
+  { variant: "ice", words: ["ice", "frost", "glacial", "crystal"] },
+];
+
+function resolveTeleportVariant(entry) {
+  const element = entry?.verdict?.ability?.element;
+  if (element && TELEPORT_ELEMENT_VARIANT[element]) return TELEPORT_ELEMENT_VARIANT[element];
+  const text = `${entry.ability_name || ""} ${entry.description || ""}`.toLowerCase();
+  for (const { variant, words } of TELEPORT_KEYWORD_VARIANT) {
+    if (words.some((w) => text.includes(w))) return variant;
+  }
+  return "arcane";
+}
+
 /**
  * Kicks off the visual sequence for a resolved turn. `intent` comes from
  * actionInterpreter; `opponentAnim` is the other fighter's live anim state
@@ -83,6 +107,37 @@ export function queueAction(anim, intent, opponentAnim, entry) {
     anim.pendingImpact = isBeamClash
       ? { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, spawnBeamClash: true, projectileVariant: variant, counterVariant: "energy", counterDamage: entry.counterDamage }
       : { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, projectileVariant: variant, spawnProjectile: true };
+    return;
+  }
+
+  if (intent.category === "teleport") {
+    // Where to reappear: the ability's own flavor text picks the shape
+    // (behind the opponent, retreating away, or the default — arriving at
+    // striking range) — the same "read the generated description" approach
+    // resolveProjectileVariant/resolveTeleportVariant above already use for
+    // cosmetic choices, not a new decision system.
+    const dir = opponentAnim.motion.x >= anim.motion.x ? 1 : -1;
+    const text = `${entry.ability_name || ""} ${entry.description || ""}`.toLowerCase();
+    let destX;
+    if (text.includes("behind")) {
+      destX = opponentAnim.motion.x + dir * (MELEE_RANGE + 24);
+    } else if ((text.includes("retreat") || text.includes("away") || text.includes("distance")) && !text.includes("close")) {
+      destX = anim.motion.x - dir * 180;
+    } else {
+      destX = opponentAnim.motion.x - dir * MELEE_RANGE;
+    }
+    anim.motion.teleportVariant = resolveTeleportVariant(entry);
+    issueCommand(anim.motion, "teleport", destX, anim.motion.y);
+    anim.motion.facing = opponentAnim.motion.x >= destX ? 1 : -1;
+
+    // A pure reposition (engine classified this as a non-damage "teleport"
+    // event) ends here — no forced punch. Only chain into a strike if the
+    // resolved turn actually carries damage (a teleport-strike combo ability).
+    const dealsDamage = (entry.damage || 0) > 0;
+    if (dealsDamage) {
+      anim.attackPhase = { variant: "teleport_strike", phase: "approach", t: 0 };
+      anim.pendingImpact = { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result };
+    }
     return;
   }
 

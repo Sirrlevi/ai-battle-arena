@@ -30,6 +30,13 @@ const GRAVITY = 1400; // px/s^2
 const JUMP_VY = -560; // px/s, negative = up
 const ARRIVE_EPSILON = 4;
 
+// Teleport: a real cut, not a slide. Fighter fades out at the origin,
+// position snaps instantly at the vanish/arrive boundary (while fully
+// invisible, for exactly one frame), then fades back in at the
+// destination — see the "teleport" branch in updateMotion below.
+const TELEPORT_VANISH_DURATION = 0.16; // seconds fading 1 -> 0 at the origin
+const TELEPORT_ARRIVE_DURATION = 0.14; // seconds fading 0 -> 1 at the destination
+
 // Phase 4D physics constants (spec section 8).
 const ACCEL_GROUND = 2000; // px/s^2 — how fast grounded horizontal speed ramps toward the target
 const ACCEL_AIR = 900; // px/s^2 — reduced control while airborne ("Air Control")
@@ -45,7 +52,7 @@ export function createMotionState(x, y, groundY) {
     vy: 0,
     facing: 1,
     grounded: true,
-    mode: "idle", // idle | walk | run | dash | jump | fly | hover
+    mode: "idle", // idle | walk | run | dash | jump | fly | hover | teleport_out | teleport_in
     groundY,
     command: null, // { type, targetX, targetY?, duration? } or null
     commandElapsed: 0,
@@ -53,6 +60,10 @@ export function createMotionState(x, y, groundY) {
     justLanded: false, // Phase 4D: true for exactly the frame grounded flips false -> true
     justStepped: false, // Phase 4D: true for exactly the frame a footstep cue should fire
     justHitWall: false, // Phase 4D: true for exactly the frame an arena-bound bounce occurred
+    teleportAlpha: 1, // 1 = fully visible, 0 = fully invisible; only ever <1 during a "teleport" command
+    teleportVariant: null, // cosmetic flavor ("lightning" | "fire" | "ice" | "wind" | "shadow" | "arcane"), set by whoever issues the teleport command
+    justVanished: false, // true for exactly the frame the fighter disappears at the origin (position already snapped to the destination this same frame)
+    justArrived: false, // true for exactly the frame the reappear fade begins at the destination
   };
 }
 
@@ -63,6 +74,14 @@ export function createMotionState(x, y, groundY) {
  */
 export function issueCommand(motion, type, targetX, targetY) {
   motion.command = { type, targetX: targetX ?? motion.x, targetY };
+  if (type === "teleport") {
+    // The vanish-phase VFX needs to play at where the fighter WAS, but by
+    // the time it fires, motion.x has already snapped to the destination
+    // (see the teleport branch below) — so the origin is captured here,
+    // up front, and read back off the command object.
+    motion.command.originX = motion.x;
+    motion.command.originY = motion.y;
+  }
   motion.commandElapsed = 0;
   if (type === "jump" && motion.grounded) {
     motion.vy = JUMP_VY;
@@ -96,6 +115,8 @@ export function updateMotion(motion, dt, bounds) {
   motion.justLanded = false;
   motion.justStepped = false;
   motion.justHitWall = false;
+  motion.justVanished = false;
+  motion.justArrived = false;
   let done = false;
 
   if (cmd && cmd.type === "jump") {
@@ -149,6 +170,36 @@ export function updateMotion(motion, dt, bounds) {
     }
     motion.grounded = false;
     motion.mode = cmd.type;
+  } else if (cmd && cmd.type === "teleport") {
+    // A true cut, not a slide: no interpolated travel between origin and
+    // destination at all. Fade out in place, snap position the instant
+    // full invisibility is reached, fade back in at the destination.
+    const elapsed = motion.commandElapsed;
+    const prevElapsed = elapsed - dt;
+    const total = TELEPORT_VANISH_DURATION + TELEPORT_ARRIVE_DURATION;
+    motion.vx = 0;
+    motion.vy = 0;
+
+    if (elapsed < TELEPORT_VANISH_DURATION) {
+      motion.mode = "teleport_out";
+      motion.teleportAlpha = Math.max(0, 1 - elapsed / TELEPORT_VANISH_DURATION);
+    } else {
+      motion.mode = "teleport_in";
+      if (prevElapsed < TELEPORT_VANISH_DURATION) {
+        // The instant cut: position snaps while alpha is at its lowest.
+        motion.x = cmd.targetX;
+        motion.y = cmd.targetY ?? motion.y;
+        motion.justVanished = true;
+        motion.justArrived = true;
+      }
+      const arriveElapsed = elapsed - TELEPORT_VANISH_DURATION;
+      motion.teleportAlpha = Math.min(1, arriveElapsed / TELEPORT_ARRIVE_DURATION);
+    }
+
+    if (elapsed >= total) {
+      motion.teleportAlpha = 1;
+      done = true;
+    }
   } else {
     // No active command: real friction (constant deceleration, not the old
     // ad-hoc exponential damping) brings horizontal motion to rest —
@@ -160,8 +211,8 @@ export function updateMotion(motion, dt, bounds) {
     motion.mode = motion.grounded ? "idle" : motion.mode;
   }
 
-  // Gravity always applies unless actively flying/hovering this frame.
-  if (!(cmd && (cmd.type === "fly" || cmd.type === "hover"))) {
+  // Gravity always applies unless actively flying/hovering/teleporting this frame.
+  if (!(cmd && (cmd.type === "fly" || cmd.type === "hover" || cmd.type === "teleport"))) {
     if (!motion.grounded || (cmd && cmd.type === "jump")) {
       motion.vy += GRAVITY * dt;
       motion.y += motion.vy * dt;

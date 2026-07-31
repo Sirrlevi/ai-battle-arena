@@ -47,6 +47,21 @@ const TRAIL_PARTICLE = {
   laser: "energy", energy: "energy", fireball: "fire", ice_shard: "ice",
   gravity_orb: "energy", void_sphere: "energy", black_hole: "energy", orb: "energy",
 };
+// Teleport visual flavor ("thunder effect, fire vfx, wind, magic — alag
+// lag"): each variant reuses an existing particleSystem.js emitter profile
+// with a color override rather than adding new ones, so the particle
+// system's catalog stays the one place particle *behavior* is defined —
+// this table only picks which existing behavior + tint reads as which
+// element. `ring` plays a brief portal-circle at both ends of the jump,
+// `spark` is the burst that sells the specific element.
+const TELEPORT_PARTICLES = {
+  lightning: { ring: "magic_circle", spark: "lightning", color: "#8FE1FF" },
+  fire: { ring: "magic_circle", spark: "fire", color: "#FF8A3D" },
+  ice: { ring: "magic_circle", spark: "ice", color: "#BEEFFF" },
+  wind: { ring: "magic_circle", spark: "aura_trail", color: "#E8F5EC" },
+  shadow: { ring: "magic_circle", spark: "energy", color: "#7B4FE0" },
+  arcane: { ring: "magic_circle", spark: "energy", color: "#B98CFF" },
+};
 const TORSO_OFFSET_Y = -80; // where projectiles launch from / aim at, relative to a fighter's feet
 let dmgNumberId = 1;
 
@@ -55,6 +70,62 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 function logError(tag, info) {
   // eslint-disable-next-line no-console
   console.error(`[BattleArena] ✕ ${tag}`, info);
+}
+
+// Codes that mean "this provider cannot continue in this battle at all" —
+// retrying won't help (bad/expired key, unknown model) or already retried
+// hard on the backend before giving up (rate limit / quota, which is what
+// RATE_LIMITED means by the time it reaches us — see providers/loggedFetch.js
+// + lib/retry.js: transient 429s are retried with backoff server-side
+// first). A fighter hitting one of these is taken off the board for the
+// rest of the fight rather than being retried every single round.
+const PERMANENT_FAILURE_CODES = new Set([
+  "RATE_LIMITED",
+  "INVALID_API_KEY",
+  "INVALID_MODEL",
+  "NO_API_KEY",
+  "UNSUPPORTED_PROVIDER",
+  "VALIDATION_ERROR",
+]);
+
+function humanizeFailureCode(code) {
+  switch (code) {
+    case "RATE_LIMITED": return "rate-limited / API quota exhausted";
+    case "INVALID_API_KEY": return "invalid API key";
+    case "INVALID_MODEL": return "unknown or unsupported model";
+    case "NO_API_KEY": return "no API key on file";
+    case "UNSUPPORTED_PROVIDER": return "unsupported provider";
+    case "VALIDATION_ERROR": return "request rejected by the backend";
+    case "CONFIG": return "backend not configured (VITE_API_URL)";
+    case "TIMEOUT": return "timed out";
+    case "NETWORK_ERROR": return "network error reaching the backend";
+    case "PROVIDER_UNAVAILABLE": return "provider temporarily unavailable";
+    case "INVALID_JSON_RESPONSE": return "returned a response the engine couldn't parse";
+    default: return null;
+  }
+}
+
+/**
+ * Turns a failed battle-turn API call into a { mode, reason } verdict for
+ * the game loop. "disable" = this fighter can't continue this fight at
+ * all — mark them and stop calling the API for them. "skip" = a one-off
+ * glitch — this turn is forfeit (no damage either way) but they get a
+ * fresh try on their next turn. Never returns anything that lets the
+ * caller fabricate an action; the whole point is that a failed call
+ * produces no action.
+ */
+function classifyTurnFailure(e) {
+  const code = e instanceof ApiError ? e.envelope?.error?.code : null;
+  if (code && PERMANENT_FAILURE_CODES.has(code)) {
+    return { mode: "disable", reason: humanizeFailureCode(code) };
+  }
+  if (e instanceof ApiError && e.kind === "config") {
+    return { mode: "disable", reason: humanizeFailureCode("CONFIG") };
+  }
+  // Timeouts, network blips, a backend that's briefly unreachable/asleep,
+  // or a malformed reply this one time — all transient.
+  const reason = humanizeFailureCode(code) || (e instanceof ApiError ? e.message : null) || "temporary issue";
+  return { mode: "skip", reason };
 }
 
 // ---------- UI: fighter setup form (Phase 1, unchanged behavior) ----------
@@ -303,6 +374,26 @@ export default function App() {
       // turn's animation events (see the "turn:resolved" subscriber below).
       if (anim.motion.justStepped) newFrameCues.push("footstep");
       if (anim.motion.justLanded) newFrameCues.push("landing_thud");
+      if (anim.motion.justVanished || anim.motion.justArrived) {
+        const flavor = TELEPORT_PARTICLES[anim.motion.teleportVariant] || TELEPORT_PARTICLES.arcane;
+        // Vanish burst plays at the ORIGIN (stashed on the command before
+        // the instant position-snap — see movementController.js's
+        // "teleport" branch); arrive burst plays at the fighter's
+        // already-snapped current position. Both flags land on the same
+        // tick by design (the hidden window is a single instant, not a
+        // held pause), so both bursts fire together here.
+        if (anim.motion.justVanished) {
+          const ox = anim.motion.command?.originX ?? anim.motion.x;
+          const oy = (anim.motion.command?.originY ?? anim.motion.y) + TORSO_OFFSET_Y / 2;
+          emitParticles(particleSystemRef.current, flavor.ring, ox, oy, { intensity: "medium", color: flavor.color });
+          emitParticles(particleSystemRef.current, flavor.spark, ox, oy, { intensity: "high", color: flavor.color });
+        }
+        if (anim.motion.justArrived) {
+          const ay = anim.motion.y + TORSO_OFFSET_Y / 2;
+          emitParticles(particleSystemRef.current, flavor.ring, anim.motion.x, ay, { intensity: "medium", color: flavor.color });
+          emitParticles(particleSystemRef.current, flavor.spark, anim.motion.x, ay, { intensity: "high", color: flavor.color });
+        }
+      }
     }
     if (newFrameCues.length) audioCuesRef.current = [...audioCuesRef.current, ...newFrameCues].slice(-40);
 
@@ -522,12 +613,26 @@ export default function App() {
       const st = stateRef.current;
       const attacker = st[turn];
       const defender = st[1 - turn]; // two-fighter roster for now; N-fighter targeting is a later concern
+      const attackerAnimState = animRef.current[attacker.key];
+
+      // A fighter already marked unable to continue this fight (exhausted
+      // quota, invalid key/model — see classifyTurnFailure below) never
+      // gets another API call: no wasted request, no damage, no movement.
+      // Their opponent's turns keep resolving normally, so this fighter can
+      // still be hit and finished off — they just can't act back.
+      if (attackerAnimState?.disabled) {
+        turn = 1 - turn;
+        if (turn === 0) { r += 1; setRound(r); }
+        await sleep(900);
+        continue;
+      }
 
       setThinkingKey(attacker.key);
       let action = null;
       let reality = null;
       let narration = null;
       let verdict = null;
+      let turnFailure = null;
       try {
         const recentTurns = log.filter((l) => !l.system).slice(-10);
         const result = await apiBattleTurn(
@@ -545,9 +650,30 @@ export default function App() {
         verdict = result.verdict;
       } catch (e) {
         logError("runLoop:turn", { round: r, actor: attacker.name, message: e.message, envelope: e instanceof ApiError ? e.envelope : null });
-        action = { action: "Attack", ability_name: "Basic Strike", thought: `(connection issue: ${e.message || "unknown error"})`, description: "", energy_cost: 10 };
+        turnFailure = classifyTurnFailure(e);
       }
       setThinkingKey(null);
+
+      // The AI didn't actually respond this turn — the engine must never
+      // invent an attack to fill the gap. A transient failure just costs
+      // this fighter their turn (no resolveAction call at all, so hp/energy
+      // are untouched and no animation plays); a failure that means this
+      // provider can't continue (quota exhausted, bad key/model) takes them
+      // off the board for the rest of the fight — no more requests, no more
+      // movement, and their opponent's turns still land on them normally.
+      if (turnFailure) {
+        if (turnFailure.mode === "disable" && attackerAnimState) {
+          attackerAnimState.disabled = true;
+          attackerAnimState.disabledReason = turnFailure.reason;
+          setLog((prev) => [...prev, { system: true, text: `⚠️ ${attacker.name} is unable to continue (${turnFailure.reason}) — no further actions this fight.` }]);
+        } else {
+          setLog((prev) => [...prev, { system: true, text: `⏳ ${attacker.name}'s turn was skipped (${turnFailure.reason}) — no damage dealt.` }]);
+        }
+        turn = 1 - turn;
+        if (turn === 0) { r += 1; setRound(r); }
+        await sleep(900);
+        continue;
+      }
 
       const entry = resolveAction(r, attacker, defender, action, reality, verdict);
       tickStatus(attacker);
@@ -654,8 +780,9 @@ export default function App() {
           ? {
               x: anim.motion.x, y: anim.motion.y, facing: anim.motion.facing, state: anim.state, attackPhase: anim.attackPhase, flashing: anim.flashTimer > 0, hitMagnitude: anim.lastHitDamage || 0,
               vx: anim.motion.vx, vy: anim.motion.vy, grounded: anim.motion.grounded, mode: anim.motion.mode, justHitWall: anim.motion.justHitWall, combo: anim.comboCount || 0,
+              teleportAlpha: anim.motion.teleportAlpha,
             }
-          : { x: f.position.x, y: f.position.y, facing: 1, state: "idle", attackPhase: null, flashing: false, hitMagnitude: 0, vx: 0, vy: 0, grounded: true, mode: "idle", justHitWall: false, combo: 0 },
+          : { x: f.position.x, y: f.position.y, facing: 1, state: "idle", attackPhase: null, flashing: false, hitMagnitude: 0, vx: 0, vy: 0, grounded: true, mode: "idle", justHitWall: false, combo: 0, teleportAlpha: 1 },
       ];
     })
   );

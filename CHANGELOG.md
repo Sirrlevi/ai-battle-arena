@@ -1,0 +1,154 @@
+# AI Battle Arena — Fix & Polish Changelog
+
+## 1. Root cause: animation loop was crashing every battle (`frontend/src/App.jsx`)
+
+`hitstopRef` was read/written throughout the per-frame game loop but never
+declared with `useRef()` anywhere in the file — every other ref in
+`App.jsx` had a matching declaration, this one didn't. On the first frame
+after a battle started, `hitstopRef.current` threw `ReferenceError:
+hitstopRef is not defined`. Because that throw happened *before*
+`requestAnimationFrame(loop)` rescheduled itself, the whole render loop
+died right there — motion, pose, camera, and particles all stopped while
+other React-driven UI (log, HP bars) kept updating normally.
+
+**Fix:** added the missing `const hitstopRef = useRef(0);`. Nothing else
+changed.
+
+## 2. Hit-stop now fires on ordinary hits, not just beam clashes (`App.jsx`)
+
+The freeze-frame mechanic existed and worked for the one beam-clash case
+but never fired for normal melee/projectile hits. Added a shared
+`triggerHitstop(damage, lethal)` helper (skips chip damage, scales with
+damage, capped) and call it from both the direct-hit and projectile-hit
+paths.
+
+## 3. AI-failure handling — the engine no longer invents an attack when an AI doesn't respond (`App.jsx`)
+
+**The bug:** when `apiBattleTurn` failed for *any* reason — network error,
+backend down, malformed JSON from the model, rate limit, exhausted quota —
+the `catch` block fabricated a fake `{ action: "Attack", ability_name:
+"Basic Strike", energy_cost: 10 }` and fed it straight into
+`resolveAction`. With no `verdict` available, `resolveAction`'s fallback
+path rolls real damage (~15–20) and applies it to the opponent. So a
+connection hiccup or an exhausted API key was silently dealing damage on
+the AI's behalf. The backend itself already refused to do this
+(`decisionEngine.js` explicitly throws `INVALID_JSON_RESPONSE` instead of
+fabricating a result) — the fabrication was happening one layer up, in the
+frontend's error handling.
+
+**The fix — two failure modes, matching what you described:**
+
+- **Transient** (timeout, network blip, backend briefly unreachable, a
+  malformed reply this one time): the turn is simply forfeit. No
+  `resolveAction` call at all — hp/energy untouched, no animation plays,
+  the fighter just stands there. They get a fresh try on their next turn.
+- **Permanent for this fight** (rate-limited/quota exhausted after the
+  backend's own retries are exhausted, invalid API key, unknown model, no
+  key on file): the fighter is marked `disabled` and **no further API
+  calls are attempted for them for the rest of the battle** — no wasted
+  requests. They take no more actions and don't move. Their opponent's
+  turns keep resolving completely normally, so the opponent can still hit
+  and finish them off.
+
+A new `classifyTurnFailure(e)` helper reads the error code your backend
+already attaches (`RATE_LIMITED`, `INVALID_API_KEY`, `INVALID_JSON_RESPONSE`,
+`TIMEOUT`, etc. — see `backend/src/lib/errors.js` / `providers/loggedFetch.js`,
+these were already well-classified server-side) and returns which of the
+two modes applies. The battle log shows a clear system message either way
+(⏳ skipped vs. ⚠️ disabled) so it's visible what happened and why.
+
+## 4. Mutual live-stat visibility — audited and strengthened (`backend/src/lib/memory/promptBuilder.js`)
+
+Good news first: in **Engine authority mode (the default)**, this was
+already fully implemented. `worldState.js` builds a complete live view for
+*both* fighters — HP, energy, mana, stamina, shield, armor, cooldowns,
+status effects, tier — and it was already going into every turn's prompt.
+
+What I found and fixed: the system prompt's sentence claiming this
+visibility was **unconditional text**, but `world_state` is only actually
+populated in Engine mode — in AI/Hybrid authority mode it's `undefined`,
+so the model was being told about data it wasn't actually receiving in
+those modes. Fixed by making that sentence accurate per mode, and made the
+instruction itself more explicit everywhere: *"weigh your resources
+against your opponent's — press an advantage when ahead, play safer when
+behind — never pick an action at random."* That's a direct, stronger
+anti-"random moves" instruction than the previous vague "use them."
+
+*(Note: this changes prompt wording only — no schema, scoring, or damage
+logic touched.)*
+
+## 5. Teleport visuals — real vanish/reposition/reappear instead of hover-or-nothing
+
+**Root cause:** `interpretAction()` (which decides what animation an
+action gets) had no "teleport" category at all — "teleport" wasn't in its
+keyword list and the engine's own `eventType: "teleport"` classification
+was never checked. So a teleport ability fell through to whatever
+generic category its flavor text happened to match (often "movement/hover"
+or the melee default) — hence the hover-or-nothing you saw, while the
+battle log correctly said "teleport" (that part was always coming from the
+engine, which had this modeled correctly all along).
+
+**What's new, across 5 files:**
+- `movementController.js` — a real `"teleport"` motion command: fades the
+  fighter out at the origin (0.16s), **instantly snaps position** the
+  moment they're fully invisible (no interpolated travel — that's the
+  actual "cut" a teleport should be), then fades back in at the
+  destination (0.14s). Gravity is suspended for the duration so they don't
+  fall mid-teleport.
+- `actionInterpreter.js` — trusts the engine's own `eventType`/`result ===
+  "teleport"` first (authoritative), falls back to keywords (teleport,
+  blink, phase, warp, vanish, shadowstep) otherwise.
+- `animationController.js` — picks a destination from the ability's own
+  description (`"behind"` → reappear behind the opponent, `"retreat"` /
+  `"away"` → reposition backward, otherwise → arrive at striking range),
+  and a VFX flavor (lightning / fire / ice / wind / shadow / arcane) from
+  element data or flavor-text keywords, the same pattern the projectile
+  system already used for its own variant picking. Only chains into a
+  strike pose afterward if the turn actually carries damage — a pure
+  reposition teleport just ends at the destination.
+- `App.jsx` — fires a themed particle burst (a portal-ring + an
+  elemental spark burst) at both the vanish point and the arrival point,
+  reusing your existing particle catalog with color overrides rather than
+  adding new emitter types.
+- `Stickman.jsx` — actually renders the invisibility: opacity now follows
+  the teleport fade, so the character is genuinely gone mid-teleport
+  instead of continuing to render.
+
+The "where to teleport" decision is still the AI's own — this only fixes
+how it *looks* once that decision is made, same as you asked.
+
+## 6. Laser / heat-vision — a real beam instead of a flying bullet (`components/Projectile.jsx`)
+
+**Root cause:** the laser variant used the exact same rendering path as
+every point-projectile (fireball, arrow, orb) — a short 44px segment
+riding the interpolated position between source and target, i.e. a small
+object flying through the air. That's why it read as a bullet.
+
+**Fix:** laser now renders the **entire path from shooter to target** as a
+layered glowing line (soft outer glow + core beam + hot point at the
+leading edge) every frame it's alive, with a near-instant reveal so it
+connects almost immediately and then holds — the classic heat-vision /
+optic-blast look, connected light rather than a traveling object.
+
+**Honest scope note:** the underlying turn-based combat system resolves
+one action per turn with a fixed outcome — there's no concept of "holding"
+a beam for a variable, player-chosen duration, and building that would
+mean changing how actions and turns work, not just how they're drawn. I
+did not touch that. What this fixes is purely the *look*: connected beam
+instead of a bullet, for however long the existing action already lasts
+on screen.
+
+## Files touched this session
+`frontend/src/App.jsx`, `frontend/src/lib/movementController.js`,
+`frontend/src/lib/actionInterpreter.js`, `frontend/src/lib/animationController.js`,
+`frontend/src/components/Stickman.jsx`, `frontend/src/components/Projectile.jsx`,
+`backend/src/lib/memory/promptBuilder.js`.
+
+No backend routes, deployment config, database, character/power/ability
+schema, or UI layout were touched.
+
+## Honest limitation (unchanged from before)
+No network access in this sandbox, so no `npm install` / dev server /
+browser to visually confirm any of this. Everything above is as carefully
+reasoned through the actual code paths as static reading allows — please
+run it locally before shipping to production.

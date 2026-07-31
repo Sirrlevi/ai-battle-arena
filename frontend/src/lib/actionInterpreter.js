@@ -7,12 +7,13 @@
 // changes, and adding a new category later is just another entry below.
 
 const CATEGORY_KEYWORDS = [
+  { category: "teleport", variant: "teleport", words: ["teleport", "blink", "phase", "warp", "vanish", "flicker", "shadowstep", "shadow step", "short-hop"] },
   { category: "projectile", variant: "laser", words: ["laser", "beam", "ray"] },
   { category: "projectile", variant: "fireball", words: ["fireball", "flame ball", "fire blast"] },
   { category: "projectile", variant: "energy", words: ["energy blast", "energy bolt", "blast", "bolt", "orb of energy"] },
   { category: "projectile", variant: "arrow", words: ["arrow", "shoot", "shot"] },
   { category: "projectile", variant: "orb", words: ["orb", "sphere", "void ball"] },
-  { category: "movement", variant: "dash", words: ["dash", "rush", "blink forward", "close the distance"] },
+  { category: "movement", variant: "dash", words: ["dash", "rush", "close the distance"] },
   { category: "movement", variant: "jump", words: ["jump", "leap", "hop"] },
   { category: "movement", variant: "fly", words: ["fly", "soar", "flight", "airborne"] },
   { category: "movement", variant: "hover", words: ["hover", "levitate", "float"] },
@@ -26,11 +27,20 @@ const CATEGORY_KEYWORDS = [
 
 /**
  * Returns { category, variant } for a resolved log entry. `category` is one
- * of "melee" | "projectile" | "movement" | "block" | "melee" (default).
+ * of "melee" | "projectile" | "movement" | "teleport" | "block" | "melee"
+ * (default).
  */
 export function interpretAction(entry) {
   if (entry.action === "Defend" || entry.result === "defend") {
     return { category: "block", variant: "guard" };
+  }
+
+  // The battle engine's own classification (entry.eventType, or entry.result
+  // when it's carried straight through — see battleEngine.js's
+  // NON_DAMAGE_EVENTS handling) is authoritative when present: no reason to
+  // guess from prose if the engine already knows this was a teleport.
+  if (entry.eventType === "teleport" || entry.result === "teleport") {
+    return { category: "teleport", variant: "teleport" };
   }
 
   const text = `${entry.ability_name || ""} ${entry.description || ""}`.toLowerCase();
