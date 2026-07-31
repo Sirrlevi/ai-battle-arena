@@ -24,12 +24,6 @@ const EMITTER_PROFILES = {
   healing: { count: 8, speed: -50, life: 0.8, size: 4 }, // negative speed = drifts upward
   aura_trail: { count: 6, speed: 20, life: 0.7, size: 5 },
   explosion_ring: { count: 1, speed: 0, life: 0.5, size: 90, ring: true },
-  // Phase 4C, spec section 16: "Shock Rings" and "Energy Waves" — a real
-  // 0-to-full expansion (see the `expand` flag below), distinct from
-  // explosion_ring/magic_circle's subtler ~0.6x-to-1x pulse, which stays
-  // exactly as it already was so nothing already using those looks different.
-  shockwave: { count: 1, speed: 0, life: 0.42, size: 130, ring: true, expand: true },
-  energy_wave: { count: 1, speed: 0, life: 0.75, size: 105, ring: true, expand: true },
 };
 
 let nextId = 1;
@@ -65,7 +59,6 @@ export function emitParticles(system, type, x, y, { intensity = "medium", color 
     slot.alive = true;
     slot.type = type;
     slot.ring = !!profile.ring;
-    slot.expand = !!profile.expand; // Phase 4C: true 0->full ring growth, see Particle.jsx
     slot.x = x;
     slot.y = y;
     slot.vx = Math.cos(angle) * speed;

@@ -153,30 +153,12 @@ function poseGait(worldX, facing, seed, intensity) {
   p.armR.upper = 10 - legL * 0.55;
   p.armL.lower = 16;
   p.armR.lower = 16;
-  // Foot-plant: while a leg is on its "back swing" (moving opposite the
-  // travel direction, i.e. still in ground contact rolling through the
-  // step) the ankle rotates through a flatter, ground-hugging range;
-  // during forward recovery it lifts more freely. Same sine already
-  // driving the leg, just read as a stance/swing split instead of one
-  // flat multiplier, so the foot doesn't clip forward through the ground
-  // on the push-off half of the stride.
-  const stanceL = Math.cos(phase) * facing < 0;
-  const stanceR = Math.cos(phase + Math.PI) * facing < 0;
-  p.footL = -legL * (stanceL ? 0.55 : 0.22);
-  p.footR = -legR * (stanceR ? 0.55 : 0.22);
+  p.footL = -legL * 0.3;
+  p.footR = -legR * 0.3;
   p.chestBob = -Math.abs(Math.sin(phase)) * 1.6 * intensity;
   p.headBob = p.chestBob * 0.5;
   p.chestLean = -3 * intensity;
-  // Hips and shoulders counter-rotate through the stride (classic
-  // contralateral gait — trailing hip drops back as the lead leg swings
-  // forward, shoulders twist the opposite way to cancel angular momentum).
-  // Expressed here as extra waist/chest lean split by facing so it reads
-  // correctly mirrored, scaled down at low intensity so a slow walk
-  // doesn't over-twist.
-  const hipTwist = Math.sin(phase) * 3.2 * intensity * facing;
-  const shoulderTwist = -Math.sin(phase) * 2.2 * intensity * facing;
-  p.waistLean = seed.lean * 0.3 + hipTwist;
-  p.chestLean += shoulderTwist;
+  p.waistLean = seed.lean * 0.3;
   p.stance = seed.stanceWidth;
   return p;
 }
@@ -250,22 +232,16 @@ function poseHovering(seed, now) {
   return p;
 }
 
-function poseBlocking(seed, now) {
+function poseBlocking(seed) {
   const p = basePose();
   const raise = -66 + seed.guardHeight;
-  // Phase 4F: a small continuous push/jitter while guarding — a static
-  // guard pose reads as passive; a fighter actively absorbing hits reads
-  // as alive. Inspired by a reference stick-fighter project's block state,
-  // which oscillates continuously rather than holding one fixed pose.
-  const push = Math.sin(now / 90) * 1.6;
-  p.armL.upper = raise + push * 0.4;
-  p.armR.upper = raise + push * 0.4;
+  p.armL.upper = raise;
+  p.armR.upper = raise;
   p.armL.lower = 42;
   p.armR.lower = 42;
   p.legL.lower = 16;
   p.legR.lower = 16;
-  p.chestLean = 4 + push;
-  p.waistLean = push * 0.5;
+  p.chestLean = 4;
   p.crouch = 0.3;
   p.stance = seed.stanceWidth * 1.1;
   return p;
@@ -388,22 +364,7 @@ function poseAttacking(attackPhase, facing, seed, now) {
   if (!attackPhase) return poseIdle(seed, now);
   const gen = MELEE_VARIANTS[attackPhase.variant] || poseCast;
   const prog = phaseProgress(attackPhase);
-  const pose = gen(attackPhase.phase, prog, facing >= 0 ? 1 : -1);
-  // Phase 4F: a real 90-damage haymaker should visibly read as heavier
-  // than a 10-damage jab, not just differ in which animation clip plays —
-  // inspired by a reference stick-fighter project scaling its own punch
-  // reach directly off `strength`. Rather than rescale every variant's
-  // per-joint angles individually (real risk of subtly breaking five
-  // already-tested pose functions), this amplifies the torso-lean/crouch
-  // signal every attack pose already sets — reads as "more body behind
-  // the hit" without touching arm/leg arithmetic at all.
-  const powerT = clamp((attackPhase.power || 0) / 45, 0, 1);
-  if (powerT > 0) {
-    pose.chestLean *= 1 + powerT * 0.45;
-    pose.waistLean *= 1 + powerT * 0.35;
-    pose.crouch = Math.min(0.5, pose.crouch * (1 + powerT * 0.3));
-  }
-  return pose;
+  return gen(attackPhase.phase, prog, facing >= 0 ? 1 : -1);
 }
 
 // ---------- reaction poses ----------
@@ -411,13 +372,8 @@ function poseHit(seed, hitMagnitude, facing, now) {
   const p = basePose();
   const t = clamp((hitMagnitude || 0) / 45, 0, 1); // continuous light -> heavy, spec section 7
   const away = facing >= 0 ? -1 : 1;
-  // Phase 4F: a small continuous reel/shake for the whole hit reaction,
-  // not just a static staggered pose — inspired by the reference project's
-  // stunFrames-driven oscillation, which keeps a stunned fighter looking
-  // like they're recoiling rather than frozen mid-flinch.
-  const shake = Math.sin(now / 45) * 2.2 * t;
-  p.chestLean = mix(-9, -30, t) * away * -1 + shake;
-  p.headTilt = mix(6, 20, t) * away * -1 + shake * 1.3;
+  p.chestLean = mix(-9, -30, t) * away * -1;
+  p.headTilt = mix(6, 20, t) * away * -1;
   p.waistLean = mix(-4, -14, t) * away * -1;
   p.armL.upper = mix(20, 55, t);
   p.armR.upper = mix(-20, -55, t);
@@ -494,7 +450,7 @@ function poseVictory(seed, now) {
  * }
  */
 export function computeSkeletonPose(ctx) {
-  const { fighter, state, attackPhase, facing = 1, alive = true, hitMagnitude = 0, isWinner = false, now = 0, worldX = 0, speed = 0, landPulse = 0, landSpeed = 0 } = ctx;
+  const { fighter, state, attackPhase, facing = 1, alive = true, hitMagnitude = 0, isWinner = false, now = 0, worldX = 0, speed = 0, landPulse = 0 } = ctx;
   const seed = personalitySeed(fighter);
 
   let pose;
@@ -507,7 +463,7 @@ export function computeSkeletonPose(ctx) {
       case "transforming": pose = poseTransforming(seed, now); break;
       case "hit": pose = poseHit(seed, hitMagnitude, facing, now); break;
       case "attacking": pose = poseAttacking(attackPhase, facing, seed, now); break;
-      case "blocking": pose = poseBlocking(seed, now); break;
+      case "blocking": pose = poseBlocking(seed); break;
       case "flying": pose = poseFlying(seed, now, facing >= 0 ? 1 : -1); break;
       case "hovering": pose = poseHovering(seed, now); break;
       case "jumping": pose = poseJumping(seed); break;
@@ -520,12 +476,7 @@ export function computeSkeletonPose(ctx) {
   }
 
   if (landPulse > 0 && alive) {
-    // Animation pass: squash depth now scales with how hard the landing
-    // actually was (landSpeed, px/s of fall velocity at touchdown) instead
-    // of every landing getting the same fixed dip — a step off a small hop
-    // reads as light, a knockdown-height fall reads as a real impact.
-    const impactScale = clamp(landSpeed / 650, 0.55, 1.7);
-    pose = { ...pose, crouch: Math.max(pose.crouch, landPulse * 0.75 * impactScale) };
+    pose = { ...pose, crouch: Math.max(pose.crouch, landPulse * 0.75) };
   }
   return pose;
 }

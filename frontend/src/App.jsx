@@ -25,25 +25,6 @@ const PANEL = "#12151A";
 const LINE = "#23282f";
 const DIM = "#7C8590";
 const HIT = "#E4443B";
-// Phase 4F: element-colored damage numbers, inspired by a reference
-// stick-fighter project's zone-colored hit feedback (head/body/limb) —
-// our game doesn't track hit zones, but it does track element, which is
-// the natural analog here. Falls back to the flat HIT red for "physical"
-// or anything unrecognized, so behavior is unchanged wherever no element
-// is known.
-const ELEMENT_DAMAGE_COLOR = {
-  fire: "#FF7A45",
-  ice: "#7DC8E8",
-  lightning: "#FFF6B0",
-  void: "#B46BFF",
-  gravity: "#9B7BFF",
-  light: "#FFE8A3",
-  poison: "#8FD62E",
-  physical: HIT,
-};
-function damageColorFor(element) {
-  return ELEMENT_DAMAGE_COLOR[element] || HIT;
-}
 const GOLD = "#E8B94A";
 
 const PROVIDERS = [
@@ -183,6 +164,12 @@ export default function App() {
   const animRef = useRef(makeAnimMap(roster));
   const projectileManagerRef = useRef(createProjectileManager());
   const cameraRef = useRef(createCamera(ARENA_WIDTH / 2));
+  // Freeze-frame timer (seconds remaining) for hit-stop, read/written every
+  // frame by the game loop below. This was previously referenced without
+  // ever being declared, which threw a ReferenceError on the first battle
+  // frame and silently killed the whole requestAnimationFrame loop — the
+  // root cause of movement/animation appearing to stop.
+  const hitstopRef = useRef(0);
 
   // Phase 3.95: Animation Sync Engine
   const eventBusRef = useRef(createEventBus());
@@ -224,16 +211,16 @@ export default function App() {
     setTimeout(() => setDamageNumbers((prev) => prev.filter((d) => d.id !== id)), 950);
   }
 
-  // Phase 4C, spec section 16 "Impact Frames": a very brief real pause
-  // (much shorter than beam-clash's) plus a modest flash on a genuinely
-  // heavy or lethal hit — reuses hitstopRef and snapFlash exactly as they
-  // already work for beam-clash/teleport, just smaller amounts, rather
-  // than building a separate freeze-frame/flash mechanism.
-  function triggerImpactFrame(damage, result) {
-    if (result === "lethal" || (damage || 0) > 40) {
-      hitstopRef.current = Math.max(hitstopRef.current, 0.045);
-      cameraRef.current.snapFlash = Math.max(cameraRef.current.snapFlash, 0.6);
-    }
+  // Brief freeze-frame on impact, scaled by how hard the hit landed — the
+  // same feel beam-clashes already had (see the spawnBeamClashPair onClash
+  // below), extended to ordinary melee/projectile hits. Skipped below a
+  // small damage floor so chip damage doesn't stutter the game with
+  // constant micro-freezes; `Math.max` so an already-active hitstop from a
+  // simultaneous event is never shortened.
+  function triggerHitstop(damage = 0, lethal = false) {
+    if (damage < 4 && !lethal) return;
+    const base = Math.min(0.1, 0.02 + damage * 0.0016);
+    hitstopRef.current = Math.max(hitstopRef.current, lethal ? base + 0.05 : base);
   }
 
   function handleImpact(actorAnim, targetKey, impact) {
@@ -251,17 +238,17 @@ export default function App() {
         fromAX: actorAnim.motion.x, fromAY: actorAnim.motion.y + TORSO_OFFSET_Y,
         toAX: targetAnim.motion.x, toAY: targetAnim.motion.y + TORSO_OFFSET_Y,
         ownerAKey: actorAnim.key, targetAKey: targetKey,
-        payloadA: { damage: impact.damage, result: impact.result, element: impact.element },
+        payloadA: { damage: impact.damage, result: impact.result },
         variantB: impact.counterVariant,
         fromBX: targetAnim.motion.x, fromBY: targetAnim.motion.y + TORSO_OFFSET_Y,
         toBX: actorAnim.motion.x, toBY: actorAnim.motion.y + TORSO_OFFSET_Y,
         ownerBKey: targetKey, targetBKey: actorAnim.key,
-        payloadB: { damage: impact.counterDamage, result: "hit", element: "physical" },
+        payloadB: { damage: impact.counterDamage, result: "hit" },
         onClash: (cx, cy) => {
           triggerCameraEvent(cameraRef.current, "beam-clash");
           emitParticles(particleSystemRef.current, "energy", cx, cy, { intensity: "high" });
           emitParticles(particleSystemRef.current, "explosion_ring", cx, cy, { intensity: "medium" });
-          hitstopRef.current = 0.12;
+          hitstopRef.current = Math.max(hitstopRef.current, 0.12);
         },
       });
       return;
@@ -276,7 +263,7 @@ export default function App() {
         toY: targetAnim.motion.y + TORSO_OFFSET_Y,
         ownerKey: actorAnim.key,
         targetKey,
-        payload: { damage: impact.damage, result: impact.result, element: impact.element },
+        payload: { damage: impact.damage, result: impact.result },
         bounds: MOTION_BOUNDS,
       });
       return;
@@ -284,8 +271,8 @@ export default function App() {
 
     if (impact.result === "hit" || impact.result === "lethal") {
       applyHitReaction(targetAnim, actorAnim.motion.x, impact.damage);
-      pushDamageNumber(targetAnim.motion.x, targetAnim.motion.y + TORSO_OFFSET_Y, impact.damage, damageColorFor(impact.element));
-      triggerImpactFrame(impact.damage, impact.result);
+      triggerHitstop(impact.damage, impact.result === "lethal");
+      pushDamageNumber(targetAnim.motion.x, targetAnim.motion.y + TORSO_OFFSET_Y, impact.damage, HIT);
     }
   }
 
@@ -303,19 +290,12 @@ export default function App() {
       return;
     }
 
-    // Phase 4C, spec section 11 "Slow Motion": camera.timeScale eases back
-    // to 1 in REAL time (updateCamera below always gets the real dt, so a
-    // slow-mo beat has a consistent real-world duration regardless of how
-    // slow it makes everything else look) — only the simulation itself
-    // (fighters/projectiles/particles) runs on the scaled dt.
-    const simDt = dt * (cameraRef.current.timeScale ?? 1);
-
     const currentRoster = stateRef.current;
     const newFrameCues = [];
     for (const f of currentRoster) {
       const anim = animRef.current[f.key];
       if (!anim) continue;
-      const { impact, state } = updateAnimation(anim, simDt, MOTION_BOUNDS, anim.homeX, f.alive);
+      const { impact, state } = updateAnimation(anim, dt, MOTION_BOUNDS, anim.homeX, f.alive);
       anim.state = state;
       if (impact) handleImpact(anim, impact.targetKey, impact);
       // Phase 4D, spec section 17: the two cue types with no resolved turn
@@ -323,37 +303,19 @@ export default function App() {
       // turn's animation events (see the "turn:resolved" subscriber below).
       if (anim.motion.justStepped) newFrameCues.push("footstep");
       if (anim.motion.justLanded) newFrameCues.push("landing_thud");
-      // Animation pass: landings/wall-hits previously had a sound cue and a
-      // motion-state flag but no visual payoff at all — reusing the same
-      // pooled particle emitter and camera-shake path every other impact in
-      // the game already goes through, just gated on these two motion
-      // events instead of a combat-engine verdict.
-      if (anim.motion.justLanded) {
-        const heavy = anim.motion.landSpeed > 500;
-        emitParticles(particleSystemRef.current, "dust", anim.motion.x, anim.motion.y, { intensity: heavy ? "high" : anim.motion.landSpeed > 250 ? "medium" : "low" });
-        if (heavy) triggerCameraEvent(cameraRef.current, "small-shake");
-      }
-      if (anim.motion.justHitWall) {
-        emitParticles(particleSystemRef.current, "debris", anim.motion.x, anim.motion.y + TORSO_OFFSET_Y, { intensity: "medium" });
-        triggerCameraEvent(cameraRef.current, "small-shake");
-      }
-      // Phase 4C, spec section 16 "Motion Blur": a real dash/knockback
-      // speed, not a guess — finally gives cameraController's long-dormant
-      // motionBlur field something that actually triggers it.
-      if (Math.abs(anim.motion.vx) > 480) cameraRef.current.motionBlur = Math.max(cameraRef.current.motionBlur, 0.5);
     }
     if (newFrameCues.length) audioCuesRef.current = [...audioCuesRef.current, ...newFrameCues].slice(-40);
 
     updateProjectiles(
       projectileManagerRef.current,
-      simDt,
+      dt,
       (p) => {
         if (p.payload?.result === "hit" || p.payload?.result === "lethal") {
           const targetAnim = animRef.current[p.targetKey];
           if (targetAnim) {
             applyHitReaction(targetAnim, p.fromX, p.payload.damage);
-            pushDamageNumber(p.toX, p.toY, p.payload.damage, damageColorFor(p.payload.element));
-            triggerImpactFrame(p.payload.damage, p.payload.result);
+            triggerHitstop(p.payload.damage, p.payload.result === "lethal");
+            pushDamageNumber(p.toX, p.toY, p.payload.damage, HIT);
           }
         }
       },
@@ -364,7 +326,7 @@ export default function App() {
     );
 
     updateCamera(cameraRef.current, currentRoster.map((f) => ({ alive: f.alive, motion: animRef.current[f.key]?.motion })), ARENA_WIDTH, dt);
-    updateParticles(particleSystemRef.current, simDt);
+    updateParticles(particleSystemRef.current, dt);
 
     setRenderTick((t) => t + 1);
   }, true);
@@ -691,9 +653,9 @@ export default function App() {
         anim
           ? {
               x: anim.motion.x, y: anim.motion.y, facing: anim.motion.facing, state: anim.state, attackPhase: anim.attackPhase, flashing: anim.flashTimer > 0, hitMagnitude: anim.lastHitDamage || 0,
-              vx: anim.motion.vx, vy: anim.motion.vy, grounded: anim.motion.grounded, mode: anim.motion.mode, justHitWall: anim.motion.justHitWall, combo: anim.comboCount || 0, landSpeed: anim.motion.landSpeed || 0,
+              vx: anim.motion.vx, vy: anim.motion.vy, grounded: anim.motion.grounded, mode: anim.motion.mode, justHitWall: anim.motion.justHitWall, combo: anim.comboCount || 0,
             }
-          : { x: f.position.x, y: f.position.y, facing: 1, state: "idle", attackPhase: null, flashing: false, hitMagnitude: 0, vx: 0, vy: 0, grounded: true, mode: "idle", justHitWall: false, combo: 0, landSpeed: 0 },
+          : { x: f.position.x, y: f.position.y, facing: 1, state: "idle", attackPhase: null, flashing: false, hitMagnitude: 0, vx: 0, vy: 0, grounded: true, mode: "idle", justHitWall: false, combo: 0 },
       ];
     })
   );

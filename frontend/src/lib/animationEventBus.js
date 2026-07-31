@@ -128,16 +128,11 @@ function primaryAnimationName(entry, interpreted) {
 }
 
 function cameraEventFor(entry) {
-  // Phase 4C, spec section 11: lethal and ultimate moments get their own
-  // dedicated camera treatment (Death Camera / Ultimate Camera) instead of
-  // reusing plain shake; a real critical/heavy hit gets a genuine zoom-IN
-  // (Impact Zoom) instead of only shake. Every other priority below is
-  // completely unchanged from Phase 3.95.
-  if (entry.result === "lethal") return { kind: "death-cam" };
-  if (entry.isUltimate) return { kind: "ultimate-cam" };
+  if (entry.result === "lethal") return { kind: "medium-shake" };
+  if (entry.isUltimate) return { kind: "large-shake" };
   if (entry.verdict?.ability?.areaOfEffect && (entry.damage || 0) > 40) return { kind: "zoom-out" };
   if (entry.eventType === "teleport" || entry.defense?.chosenResponse === "teleport") return { kind: "camera-snap" };
-  if (entry.verdict?.breakdown?.critical || (entry.damage || 0) > 25) return { kind: "impact-zoom" };
+  if (entry.verdict?.breakdown?.critical || (entry.damage || 0) > 25) return { kind: "medium-shake" };
   if (entry.defense?.chosenResponse === "counter" || entry.defense?.chosenResponse === "block") return { kind: "dynamic-zoom" };
   if ((entry.damage || 0) > 0) return { kind: "small-shake" };
   return null;
@@ -155,8 +150,7 @@ function particleEventsFor(entry) {
   if (ability?.areaOfEffect) events.push({ particle: "explosion_ring", intensity: "high" }, { particle: "debris", intensity: "high" });
   if (entry.result === "hit" && (entry.damage || 0) > 0) events.push({ particle: "dust", intensity: "low" });
   if (entry.eventType === "reality_rewrite" || entry.defense?.chosenResponse === "reality_defense") events.push({ particle: "reality_fragment", intensity: "medium" });
-  if (entry.result === "lethal") events.push({ particle: "explosion_ring", intensity: "high" }, { particle: "shockwave", intensity: "high" });
-  if (entry.isUltimate) events.push({ particle: "energy_wave", intensity: "high" });
+  if (entry.result === "lethal") events.push({ particle: "explosion_ring", intensity: "high" });
   return events;
 }
 

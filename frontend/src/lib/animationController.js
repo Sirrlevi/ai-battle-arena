@@ -13,16 +13,7 @@ const ATTACK_DURATIONS = { windup: 0.16, strike: 0.12, recovery: 0.26 };
 const HIT_REACT_DURATION = 0.25;
 const FLASH_DURATION = 0.18;
 const BLOCK_DURATION = 0.6;
-// Animation pass: knockback used to be one flat speed regardless of how
-// much damage actually landed, so a 5-damage jab and a 40-damage haymaker
-// shoved the target back identically — reads as weightless. Now a base
-// speed (close to the old flat 260 at a mid-range hit) plus a
-// per-damage-point component, capped so a single hit can never fling a
-// fighter clear across the arena in one frame. Purely a cosmetic push
-// (motion.vx), same as before — never touches hp/damage/combat resolution.
-const KNOCKBACK_BASE = 170;
-const KNOCKBACK_PER_DAMAGE = 3.4;
-const KNOCKBACK_MAX = 520;
+const KNOCKBACK_SPEED = 260;
 const TRANSFORM_PAUSE_DURATION = 0.9; // spec section 7: "pause combat briefly"
 
 export function createAnimState(x, y, groundY) {
@@ -75,15 +66,6 @@ function resolveProjectileVariant(entry, keywordVariant) {
  * actionInterpreter; `opponentAnim` is the other fighter's live anim state
  * (read for positioning, never mutated here).
  */
-// Phase 4F (animation polish pass, inspired by a reference stick-fighter
-// project's canvas renderer): every pendingImpact now also carries the
-// ability's element (falls back to "physical") purely so the renderer can
-// theme hit-feedback color by element instead of one flat red — never
-// read by any combat/damage logic.
-function elementOf(entry) {
-  return entry?.verdict?.ability?.element || "physical";
-}
-
 export function queueAction(anim, intent, opponentAnim, entry) {
   if (intent.category === "block") {
     anim.blockTimer = BLOCK_DURATION;
@@ -92,15 +74,15 @@ export function queueAction(anim, intent, opponentAnim, entry) {
 
   if (intent.category === "projectile") {
     const variant = resolveProjectileVariant(entry, intent.variant);
-    anim.attackPhase = { variant, phase: "windup", t: 0, power: entry.damage || 0 };
+    anim.attackPhase = { variant, phase: "windup", t: 0 };
     // Phase 4B, spec section 5: the one reachable "two beams, one
     // exchange" case — see spawnBeamClashPair's doc comment in
     // projectileManager.js for why this is the only scenario the battle
     // loop's strict turn alternation can actually produce.
     const isBeamClash = entry.defense?.chosenResponse === "counter" && (entry.counterDamage || 0) > 0;
     anim.pendingImpact = isBeamClash
-      ? { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, element: elementOf(entry), spawnBeamClash: true, projectileVariant: variant, counterVariant: "energy", counterDamage: entry.counterDamage }
-      : { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, element: elementOf(entry), projectileVariant: variant, spawnProjectile: true };
+      ? { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, spawnBeamClash: true, projectileVariant: variant, counterVariant: "energy", counterDamage: entry.counterDamage }
+      : { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, projectileVariant: variant, spawnProjectile: true };
     return;
   }
 
@@ -117,8 +99,8 @@ export function queueAction(anim, intent, opponentAnim, entry) {
     } else {
       issueCommand(anim.motion, "run", approachX);
     }
-    anim.attackPhase = { variant: "punch", phase: "approach", t: 0, power: entry.damage || 0 };
-    anim.pendingImpact = { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, element: elementOf(entry) };
+    anim.attackPhase = { variant: "punch", phase: "approach", t: 0 };
+    anim.pendingImpact = { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result };
     return;
   }
 
@@ -126,8 +108,8 @@ export function queueAction(anim, intent, opponentAnim, entry) {
   const dir = opponentAnim.motion.x >= anim.motion.x ? 1 : -1;
   const approachX = opponentAnim.motion.x - dir * MELEE_RANGE;
   issueCommand(anim.motion, "dash", approachX);
-  anim.attackPhase = { variant: intent.variant, phase: "approach", t: 0, power: entry.damage || 0 };
-  anim.pendingImpact = { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, element: elementOf(entry) };
+  anim.attackPhase = { variant: intent.variant, phase: "approach", t: 0 };
+  anim.pendingImpact = { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result };
 }
 
 export function applyHitReaction(anim, fromX, damage = 0) {
@@ -135,8 +117,7 @@ export function applyHitReaction(anim, fromX, damage = 0) {
   anim.flashTimer = FLASH_DURATION;
   anim.lastHitDamage = damage; // Phase 4A: see field comment in createAnimState above
   const dir = anim.motion.x >= fromX ? 1 : -1;
-  const knockbackSpeed = Math.min(KNOCKBACK_MAX, KNOCKBACK_BASE + damage * KNOCKBACK_PER_DAMAGE);
-  anim.motion.vx = dir * knockbackSpeed;
+  anim.motion.vx = dir * KNOCKBACK_SPEED;
 }
 
 /**

@@ -21,7 +21,7 @@
 
 import { useRef, useLayoutEffect } from "react";
 import { effectEmoji } from "../lib/battleEngine.js";
-import { RIG, computeSkeletonPose, computeAuraStyle, personalitySeed, lerpPose, clamp } from "../lib/characterAnimation.js";
+import { RIG, computeSkeletonPose, computeAuraStyle, personalitySeed, lerpPose } from "../lib/characterAnimation.js";
 
 const FOOT_Y = 0;
 
@@ -99,83 +99,23 @@ function useLandPulse(state, now) {
   return elapsed >= 0 && elapsed < LAND_PULSE_MS ? 1 - elapsed / LAND_PULSE_MS : 0;
 }
 
-// Phase 4C, spec section 16 "After Images" / "Trail Effects": a short
-// rolling history of world positions while moving fast, rendered as a few
-// faded simplified silhouettes behind the current figure — not duplicate
-// skeletons (four full FK chains every frame for a purely decorative trail
-// isn't worth the render cost, and visually four overlapping stick figures
-// reads as clutter, not a clean motion trail). Same StrictMode-safe
-// read/compute/write-via-effect shape as useSmoothedPose above.
-function useAfterImages(x, y, speed, now) {
-  const ref = useRef([]);
-  const history = ref.current;
-  let next = history;
-  if (speed > 420) {
-    const last = history[history.length - 1];
-    if (!last || Math.hypot(x - last.x, y - last.y) > 16) {
-      next = [...history, { x, y, t: now }].slice(-4);
-    }
-  }
-  next = next.filter((h) => now - h.t < 220);
-  useLayoutEffect(() => {
-    ref.current = next;
-  });
-  return next;
-}
-
 export default function Stickman({ fighter, pose, auraFilterId, effectType = null, statusVisuals = [], isWinner = false }) {
   const { name, hp, maxHp = 100, energy, maxEnergy = 100, color, alive } = fighter;
-  const { x = 0, y = 0, facing = 1, state = "idle", attackPhase = null, flashing = false, hitMagnitude = 0, combo = 0, landSpeed = 0 } = pose || {};
+  const { x = 0, y = 0, facing = 1, state = "idle", attackPhase = null, flashing = false, hitMagnitude = 0, combo = 0 } = pose || {};
 
   const now = Date.now();
   const hpPct = Math.max(0, Math.min(1, hp / maxHp));
   const energyPct = Math.max(0, Math.min(1, energy / maxEnergy));
   const emoji = effectEmoji(effectType) || (state === "blocking" ? "🛡️" : null);
   const transforming = state === "transforming";
-  // Phase 4F: sustained full-body recolor for hit/block reactions, inspired
-  // by a reference stick-fighter project's approach (it recolors the whole
-  // figure red/blue for the reaction's duration rather than only flashing).
-  // The brief white impact flash still takes priority for its own instant
-  // — this adds a real read AFTER the flash fades, for the rest of the
-  // reaction, scaled by actual damage rather than a flat color.
-  const hitT = clamp(hitMagnitude / 45, 0, 1);
-  const strokeColor = flashing
-    ? "#FFFFFF"
-    : state === "hit"
-      ? blendHex(color, "#FF4A4A", 0.32 + hitT * 0.4)
-      : state === "blocking"
-        ? blendHex(color, "#4488FF", 0.38)
-        : transforming
-          ? "#F5E663"
-          : color;
+  const strokeColor = flashing ? "#FFFFFF" : transforming ? "#F5E663" : color;
 
   const speed = useSpeed(x, now);
   const landPulse = useLandPulse(state, now);
-  const afterImages = useAfterImages(x, y, speed, now); // gated on `alive` at the render site below, not here — hooks must always run unconditionally
-  const targetPose = computeSkeletonPose({ fighter, state, attackPhase, facing, alive, hitMagnitude, isWinner, now, worldX: x, speed, landPulse, landSpeed });
-  // BUGFIX (movement-animation root cause): a single low blend rate was
-  // applied to every pose channel regardless of how fast that pose was
-  // already changing on its own. poseGait's leg/arm angles are a sin() of
-  // worldX, so their oscillation frequency scales directly with travel
-  // speed — at "dash" speed (640px/s, what every melee approach actually
-  // uses) the gait cycles roughly every ~150ms. The old flat 0.24 rate is
-  // an exponential low-pass filter with a cutoff well below that
-  // oscillation frequency, so it was smoothing the swing amplitude almost
-  // all the way back to zero every frame: the skeleton kept translating
-  // across the screen (the outer transform) while its limbs stayed near
-  // their rest pose — exactly the "sliding without proper movement
-  // animation" symptom. 0.24 is still correct for what it was tuned for —
-  // suppressing pop when the pose SOURCE jumps discontinuously (idle <->
-  // attack <-> hit state swaps). Locomotion doesn't jump like that;
-  // poseGait is already continuous, so it needs a rate fast enough not to
-  // filter out its own signal, not one tuned for hiding a different kind
-  // of pop that was never present here.
-  const blendRate =
-    attackPhase?.phase === "strike" ? 0.7
-    : state === "hit" ? 0.55
-    : state === "running" ? 0.85
-    : state === "walking" ? 0.6
-    : 0.24;
+  const targetPose = computeSkeletonPose({ fighter, state, attackPhase, facing, alive, hitMagnitude, isWinner, now, worldX: x, speed, landPulse });
+  // Strikes and hit-reactions blend fast (near-instant) so impact stays
+  // crisp; ordinary movement blends slower for smoothness.
+  const blendRate = attackPhase?.phase === "strike" ? 0.7 : state === "hit" ? 0.55 : 0.24;
   const skel = useSmoothedPose(targetPose, blendRate);
 
   const seed = personalitySeed(fighter);
@@ -217,19 +157,6 @@ export default function Stickman({ fighter, pose, auraFilterId, effectType = nul
   const auraRx = 46 * aura.scale;
   const auraRy = 78 * aura.scale;
 
-  // Phase 4F: a bright dot at the exact striking limb during the active
-  // strike window — inspired by the reference project's impact indicator,
-  // timed to the same "strike" sub-phase animationController.js already
-  // tracks (no new timer, no invented data).
-  const MELEE_IMPACT_VARIANTS = new Set(["punch", "kick", "uppercut", "roundhouse", "slash"]);
-  const KICK_VARIANTS = new Set(["kick", "roundhouse"]);
-  const isStriking = alive && state === "attacking" && attackPhase?.phase === "strike" && MELEE_IMPACT_VARIANTS.has(attackPhase.variant);
-  const impactPoint = isStriking
-    ? KICK_VARIANTS.has(attackPhase.variant)
-      ? (facing >= 0 ? footTipR : footTipL)
-      : (facing >= 0 ? handR : handL)
-    : null;
-
   return (
     <g transform={`translate(${x}, ${y + skel.hop}) rotate(${rotation}) scale(${transformScale})`} opacity={opacity}>
       {/* Aura glow — spec section 6 (partial): shape/spike-count/pulse-speed
@@ -265,34 +192,6 @@ export default function Stickman({ fighter, pose, auraFilterId, effectType = nul
         />
       ))}
 
-      {/* Phase 4C, spec section 16 "After Images" — simplified faded
-          silhouettes at recent fast-movement positions, drawn behind the
-          current figure. See useAfterImages' comment for why these are a
-          simple shape, not duplicate skeletons. */}
-      {alive && afterImages.slice(0, -1).map((h, i, arr) => {
-        const ageT = Math.min(1, (now - h.t) / 220);
-        const op = (1 - ageT) * 0.18 * ((i + 1) / (arr.length + 1));
-        return (
-          <g key={`ghost-${h.t}`} transform={`translate(${h.x - x}, ${h.y - y})`} opacity={op}>
-            <ellipse cx={0} cy={hipY - 40} rx={17} ry={46} fill={color} />
-            <circle cx={0} cy={hipY - 90} r={RIG.HEAD_R} fill={color} />
-          </g>
-        );
-      })}
-
-      {/* Phase 4C, spec section 16 "Speed Lines" — radiating opposite the
-          travel direction, opacity/reach scaled by real speed. */}
-      {alive && speed > 380 && (
-        <g opacity={Math.min(1, (speed - 380) / 300)}>
-          {[0, 1, 2].map((i) => {
-            const yOff = hipY - 20 - i * 30;
-            const len = 24 + i * 7;
-            const xBase = -facing * 30;
-            return <line key={i} x1={xBase} y1={yOff} x2={xBase - facing * len} y2={yOff} stroke={color} strokeWidth={2} strokeLinecap="round" opacity={0.5 - i * 0.12} />;
-          })}
-        </g>
-      )}
-
       {/* ---------- Skeleton (spec section 1) ---------- */}
       {/* Legs (drawn first so the torso/arms overlap them at the hip, as before) */}
       <line x1={hipL.x} y1={hipL.y} x2={kneeL.x} y2={kneeL.y} stroke={strokeColor} strokeWidth={3.2} strokeLinecap="round" />
@@ -316,14 +215,6 @@ export default function Stickman({ fighter, pose, auraFilterId, effectType = nul
 
       {/* Head */}
       <circle cx={head.x} cy={head.y} r={RIG.HEAD_R} fill="none" stroke={strokeColor} strokeWidth={3} />
-
-      {/* Phase 4F: impact-frame flash at the striking limb, active strike window only */}
-      {impactPoint && (
-        <>
-          <circle cx={impactPoint.x} cy={impactPoint.y} r={9} fill="#FFFFFF" opacity={0.55} />
-          <circle cx={impactPoint.x} cy={impactPoint.y} r={4} fill="#FFFFFF" />
-        </>
-      )}
 
       {/* Effect / status indicator */}
       {emoji && alive && (
