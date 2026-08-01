@@ -16,7 +16,19 @@ export default function Arena({ fighters, poses = {}, activeEffects = {}, camera
   const cam = camera || { x: ARENA_WIDTH / 2, zoom: 1, shakeOffsetX: 0, shakeOffsetY: 0 };
   const shakeX = cam.shakeOffsetX || 0;
   const shakeY = cam.shakeOffsetY || 0;
-  const sceneTransform = `translate(${ARENA_WIDTH / 2 + shakeX}, ${ARENA_HEIGHT + shakeY}) scale(${cam.zoom}) translate(${-cam.x}, ${-ARENA_HEIGHT})`;
+  // A brief directed "punch" toward a recent impact point, additive on top
+  // of the normal follow/zoom (see triggerCameraEvent's "impact-zoom" case
+  // in cameraController.js) — punchX pulls the view a little further
+  // toward where the hit landed, punchZoom pushes in slightly.
+  const punchX = (cam.punchInIntensity || 0) * (cam.punchInDir || 0);
+  const zoom = cam.zoom + (cam.punchInZoom || 0);
+  const sceneTransform = `translate(${ARENA_WIDTH / 2 + shakeX}, ${ARENA_HEIGHT + shakeY}) scale(${zoom}) translate(${-cam.x - punchX}, ${-ARENA_HEIGHT})`;
+  // motionBlur has existed on the camera object since Phase 3.95 but was
+  // never actually applied to anything — wired up here as a horizontal
+  // Gaussian blur on the whole scene (horizontal-only since the camera
+  // itself only ever pans/shakes horizontally), intensity tied directly to
+  // cam.motionBlur so it reads as a quick streak-blur, not a held filter.
+  const motionBlurAmount = (cam.motionBlur || 0) * 6;
 
   return (
     <div className="w-full rounded-lg overflow-hidden" style={{ border: "1px solid #23282f", background: "#0A0C0F" }}>
@@ -28,6 +40,9 @@ export default function Arena({ fighters, poses = {}, activeEffects = {}, camera
           </radialGradient>
           <filter id="stickmanAuraBlur" x="-60%" y="-60%" width="220%" height="220%">
             <feGaussianBlur stdDeviation="10" />
+          </filter>
+          <filter id="cameraMotionBlur" x="-30%" y="-10%" width="160%" height="120%">
+            <feGaussianBlur stdDeviation={`${motionBlurAmount} 0`} />
           </filter>
           <linearGradient id="groundFade" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#1a1e24" stopOpacity="0" />
@@ -47,7 +62,7 @@ export default function Arena({ fighters, poses = {}, activeEffects = {}, camera
         </text>
 
         {/* Camera-driven scene: fighters, projectiles, damage numbers */}
-        <g transform={sceneTransform}>
+        <g transform={sceneTransform} filter={motionBlurAmount > 0.15 ? "url(#cameraMotionBlur)" : undefined}>
           {projectiles.map((p) => (
             <Projectile key={p.id} projectile={p} />
           ))}
@@ -76,6 +91,12 @@ export default function Arena({ fighters, poses = {}, activeEffects = {}, camera
         {/* Phase 3.95 camera-snap flash (teleport events) — outside the scene transform so it reads as a full-screen cut, not a world-space effect. */}
         {cam.snapFlash > 0 && (
           <rect x={0} y={0} width={ARENA_WIDTH} height={ARENA_HEIGHT} fill="#FFFFFF" opacity={cam.snapFlash * 0.35} />
+        )}
+        {/* Impact-frame flash — a warmer, snappier hit-scaled flash for
+            heavy/critical/lethal strikes, distinct from the teleport-only
+            snapFlash above so the two read as different events. */}
+        {cam.impactFlash > 0 && (
+          <rect x={0} y={0} width={ARENA_WIDTH} height={ARENA_HEIGHT} fill="#FFD9B0" opacity={cam.impactFlash * 0.3} />
         )}
       </svg>
     </div>

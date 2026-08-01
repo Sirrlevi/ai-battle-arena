@@ -344,6 +344,7 @@ export default function App() {
         payloadB: { damage: impact.counterDamage, result: "hit" },
         onClash: (cx, cy) => {
           triggerCameraEvent(cameraRef.current, "beam-clash");
+          triggerCameraEvent(cameraRef.current, "motion-blur", { intensity: 0.8 });
           emitParticles(particleSystemRef.current, "energy", cx, cy, { intensity: "high" });
           emitParticles(particleSystemRef.current, "explosion_ring", cx, cy, { intensity: "medium" });
           hitstopRef.current = Math.max(hitstopRef.current, 0.12);
@@ -372,7 +373,21 @@ export default function App() {
       applyHitReaction(targetAnim, actorAnim.motion.x, impact.damage);
       triggerHitstop(impact.damage, impact.result === "lethal");
       pushDamageNumber(targetAnim.motion.x, targetAnim.motion.y + TORSO_OFFSET_Y, impact.damage, HIT);
+      triggerImpactFrame(targetAnim.motion.x, impact.damage, impact.result === "lethal");
     }
+  }
+
+  // Full "impact frame" treatment — flash + a directed camera punch toward
+  // the hit + a quick motion-blur streak — reserved for genuinely heavy/
+  // critical/lethal hits (damage >= 15, or any lethal blow) so it reads as
+  // a meaningful beat rather than noise on every routine poke. Shared by
+  // both the direct-hit path above and the projectile-arrival path below.
+  function triggerImpactFrame(atX, damage, lethal) {
+    if (damage < 15 && !lethal) return;
+    const strength = Math.min(1, damage / 40) + (lethal ? 0.3 : 0);
+    triggerCameraEvent(cameraRef.current, "impact-flash", { intensity: 0.35 + strength * 0.45 });
+    triggerCameraEvent(cameraRef.current, "impact-zoom", { x: atX, intensity: 0.04 + strength * 0.09 });
+    triggerCameraEvent(cameraRef.current, "motion-blur", { intensity: 0.5 + strength * 0.5 });
   }
 
   // ---------- The Phase 3 game loop: runs independently of the turn-based
@@ -436,6 +451,7 @@ export default function App() {
           emitParticles(particleSystemRef.current, "dust", anim.motion.x, anim.motion.y, { intensity: "high" });
           emitParticles(particleSystemRef.current, "debris", anim.motion.x, anim.motion.y, { intensity: "medium" });
           triggerCameraEvent(cameraRef.current, "medium-shake");
+          triggerCameraEvent(cameraRef.current, "motion-blur", { intensity: 0.6 });
         } else if (anim.motion.mode !== "hover") {
           newFrameCues.push("landing_thud");
         }
@@ -447,6 +463,7 @@ export default function App() {
         emitParticles(particleSystemRef.current, "explosion_ring", anim.motion.x, anim.motion.y, { intensity: "medium" });
         emitParticles(particleSystemRef.current, "dust", anim.motion.x, anim.motion.y, { intensity: "high" });
         triggerCameraEvent(cameraRef.current, "small-shake");
+        triggerCameraEvent(cameraRef.current, "motion-blur", { intensity: 0.5 });
       }
       // A light continuous trail for the whole traversal, not just the two
       // endpoints — probabilistic emission (~14/s) instead of a new
@@ -488,6 +505,7 @@ export default function App() {
             applyHitReaction(targetAnim, p.fromX, p.payload.damage);
             triggerHitstop(p.payload.damage, p.payload.result === "lethal");
             pushDamageNumber(p.toX, p.toY, p.payload.damage, HIT);
+            triggerImpactFrame(p.toX, p.payload.damage, p.payload.result === "lethal");
           }
         }
       },

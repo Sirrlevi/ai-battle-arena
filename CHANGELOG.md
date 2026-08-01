@@ -325,10 +325,54 @@ than just display text. Flagging it rather than bundling in an
 unrequested, less-scoped change: happy to take it on as its own item if
 you want it.
 
+## 10. Cinematic camera / impact frames (`cameraController.js`, `Arena.jsx`, `App.jsx`)
+
+Found something worth flagging before describing the fix: the camera
+system already had `motionBlur` and `clashFreeze` fields, fully tracked
+and decaying every frame since Phase 3.95 — but neither was ever actually
+read anywhere in `Arena.jsx`. The state machinery existed; nothing was
+drawing it. That's most of why "cinematic" didn't read as cinematic yet.
+
+**Wired up motion blur for real.** Added an SVG filter
+(`feGaussianBlur`, horizontal-only, since the camera itself only ever
+pans/shakes horizontally) applied to the whole scene group, intensity
+tied directly to `cam.motionBlur`. Now actually triggered on: a heavy/
+critical/lethal hit landing (melee or projectile), a beam-clash, and a
+hard fly takeoff/landing.
+
+**New: a directed camera "punch" toward the hit (`impact-zoom`).**
+Previously the camera could only ever *zoom out* (generically, never
+toward a specific point) — there was no mechanism for the camera to react
+toward a specific location at all. Added `punchInIntensity`/`punchInDir`/
+`punchInZoom`, decaying fast (~0.3s) exactly like the existing shake-
+offset pattern, just aimed instead of random: layered *additively* on top
+of the normal follow/zoom target (never replacing it), so it reads as a
+quick reactive jab rather than fighting or overriding the follow camera.
+
+**New: a hit-scaled impact flash (`impact-flash`), distinct from the
+existing teleport-only snap-flash.** Same full-screen overlay technique
+`snapFlash` already used, but warmer-toned, snappier decay, and scaled by
+how hard the hit landed instead of always full intensity — so a teleport
+cut and a haymaker landing don't look like the same event.
+
+**All three fire together** on a genuinely heavy hit (damage ≥ 15, or any
+lethal blow — deliberately gated so this doesn't fire on routine chip
+damage) via a new shared `triggerImpactFrame()` helper in `App.jsx`,
+alongside the hitstop freeze that already existed: freeze, flash, camera
+punch, and a blur streak as it releases — the classic "impact frame"
+combo, built almost entirely out of decay patterns the codebase already
+used elsewhere (shake, snap-flash), not new machinery.
+
+**What I did not change:** the base follow-camera logic in
+`updateCamera` (targetX/targetZoom from fighter spread) — every addition
+here is a layered, independently-decaying offset on top of it, same
+architecture Phase 3.95 already established for shake/zoom-out.
+
 ## Files touched across this session
 `frontend/src/App.jsx`, `frontend/src/lib/movementController.js`,
 `frontend/src/lib/actionInterpreter.js`, `frontend/src/lib/animationController.js`,
-`frontend/src/lib/characterAnimation.js`, `frontend/src/components/Stickman.jsx`,
+`frontend/src/lib/characterAnimation.js`, `frontend/src/lib/cameraController.js`,
+`frontend/src/components/Stickman.jsx`, `frontend/src/components/Arena.jsx`,
 `frontend/src/components/Projectile.jsx`, `backend/src/lib/memory/promptBuilder.js`.
 
 No backend routes, deployment config, database, character/power/ability
