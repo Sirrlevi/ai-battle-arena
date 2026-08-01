@@ -191,6 +191,59 @@ not a polish pass — the fixes above address the actual symptom you
 described ("punches thrown in the air, don't land on each other") at its
 real root cause (distance + timing), without it.
 
+## 8. Flying VFX — real altitude, hard vs. soft takeoff/landing, and a proper arc (`movementController.js`, `animationController.js`, `App.jsx`)
+
+**Root cause:** a fly/hover attack only ever rose **40px** above the
+ground (a single hardcoded offset shared with jump), had zero particle/
+camera VFX anywhere in its lifecycle, and — since nothing kept a fighter
+airborne once that one motion command finished — gravity took back over
+immediately afterward with no landing treatment at all. That's the "kuch
+dikhta hi nahi" (nothing visible happens) you described: a barely-there
+40px bob and then straight back down, silently.
+
+**Fixed, in three parts:**
+
+**(a) Real altitude, geometrically correct.** A single altitude can't do
+both jobs a flying attack needs — dramatic height for the sake of looking
+like flight, AND a strike that actually lands on a grounded opponent (the
+punch itself only reaches ~50px, so contact has to happen near ground
+level or it visibly whiffs above their head). So **fly** is now a genuine
+two-stage arc: soar up to a dramatic peak (170px — roughly 1.5-2x a
+fighter's own height, comfortably inside the ~340px of headroom between
+`GROUND_Y` and the arena's top edge) across most of the horizontal
+distance, then swoop down to a proper strike height (34px) for the actual
+hit — a "dive in and punch" read, same shape real flying-attack scenes
+use. **Hover** stays at one gentle, consistently low height (26px)
+throughout — no peak, no arc — which is what makes it read as "soft" next
+to fly's swoop.
+
+**(b) Hard vs. soft takeoff/landing VFX.** A new `justTookOff` flag
+(mirroring the existing `justLanded`) fires once, the exact frame a
+fly/hover command lifts a fighter off the ground.
+- **Fly** (hard): takeoff and landing both get a shockwave ring +
+  ground-kicked dust + a camera shake (landing gets debris too, and a
+  stronger shake — impacts should hit harder than launches).
+- **Hover** (soft): none of that. No ring, no dust burst, no camera
+  shake, not even the plain landing thud other movement gets — genuinely
+  silent and smooth, "like butter," exactly as asked.
+- Both also get a light continuous trail wisp for the whole transit (fly
+  a bit stronger than hover), so the character reads as airborne
+  throughout the flight, not just at the two endpoints.
+
+**(c) A fighter who flew in also flies home.** Previously the return trip
+after *any* movement-category attack used a plain ground "walk," which
+would have looked broken now that fly/hover start from real altitude —
+mid-air fighter suddenly speed-walking. The recovery phase now checks
+which style was used to approach and returns the same way, descending
+back to `groundY` — which is also what lets the hard-landing VFX above
+correctly fire on the way home.
+
+**What I did not change:** `characterAnimation.js`'s `poseFlying`/
+`poseHovering` pose functions themselves (the arm/body posture during
+flight) — those already looked reasonable and don't depend on absolute
+altitude, only relative joint angles, so they carry over correctly at the
+new heights with no changes needed.
+
 ## Files touched across this session
 `frontend/src/App.jsx`, `frontend/src/lib/movementController.js`,
 `frontend/src/lib/actionInterpreter.js`, `frontend/src/lib/animationController.js`,

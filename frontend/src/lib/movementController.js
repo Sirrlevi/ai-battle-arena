@@ -64,6 +64,7 @@ export function createMotionState(x, y, groundY) {
     teleportVariant: null, // cosmetic flavor ("lightning" | "fire" | "ice" | "wind" | "shadow" | "arcane"), set by whoever issues the teleport command
     justVanished: false, // true for exactly the frame the fighter disappears at the origin (position already snapped to the destination this same frame)
     justArrived: false, // true for exactly the frame the reappear fade begins at the destination
+    justTookOff: false, // true for exactly the frame a fly/hover command lifts off from standing on the ground
   };
 }
 
@@ -117,6 +118,7 @@ export function updateMotion(motion, dt, bounds) {
   motion.justHitWall = false;
   motion.justVanished = false;
   motion.justArrived = false;
+  motion.justTookOff = false;
   let done = false;
 
   if (cmd && cmd.type === "jump") {
@@ -151,6 +153,7 @@ export function updateMotion(motion, dt, bounds) {
     }
     motion.mode = cmd.type;
   } else if (cmd && (cmd.type === "fly" || cmd.type === "hover")) {
+    if (motion.grounded) motion.justTookOff = true; // fires once — the frame this command lifts off from standing
     const speed = SPEEDS[cmd.type];
     const dx = cmd.targetX - motion.x;
     const dy = (cmd.targetY ?? motion.y) - motion.y;

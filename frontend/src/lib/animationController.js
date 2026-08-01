@@ -19,6 +19,19 @@ import { resolveAnimationState } from "./animationStateMachine.js";
 // the target, which is what read as "punching the air."
 const MELEE_REACH = { punch: 56, slash: 56, uppercut: 56, kick: 72, roundhouse: 72 };
 const DEFAULT_MELEE_REACH = 56; // arm-based default, for categories (teleport/movement) that always land on an arm-style pose (poseCast/posePunch)
+// How far above GROUND_Y (340, per battleState.js) fly/hover get during a
+// movement-category attack. GROUND_Y leaves ~340px of headroom to the
+// arena's top edge (ARENA_HEIGHT 420) in world space, so FLY_PEAK_ALTITUDE
+// is well within bounds. Two different numbers, not one, because a single
+// altitude can't serve both jobs: the strike needs to land at roughly the
+// defender's own height (STRIKE_ALTITUDE — the punch itself only reaches
+// ~50px, so contact needs to happen near ground level) while the
+// *transit* should still read as dramatically airborne (FLY_PEAK_ALTITUDE)
+// — see the two-stage "soar, then swoop down to strike" arc in
+// queueAction and updateAnimation's approach-phase handling below.
+const FLY_PEAK_ALTITUDE = 170; // dramatic mid-flight height, fly's transit only
+const FLY_STRIKE_ALTITUDE = 34; // fly's actual contact height, low enough to land the punch correctly
+const HOVER_STRIKE_ALTITUDE = 26; // hover never leaves this low, gentle height at all — no separate peak stage
 function reachFor(variant) {
   return MELEE_REACH[variant] ?? DEFAULT_MELEE_REACH;
 }
@@ -56,6 +69,8 @@ export function createAnimState(x, y, groundY) {
     statusVisuals: [], // Phase 3.95: active status-effect visuals (see statusVisuals.js), refreshed each turn
     lastHitDamage: 0, // Phase 4A: cosmetic only — read by characterAnimation.js to scale hit-reaction pose (light flinch vs heavy stagger). Never read by any damage/combat logic.
     hitDir: 0, // which way (1 | -1) they were last knocked — cosmetic only, feeds hitStaggerDegrees below
+    approachStyle: null, // "fly" | "hover" | null — set by queueAction's movement branch, read by the recovery-phase return trip below so a fighter who flew in also flies home instead of walking
+    pendingDescend: null, // { targetX, targetY } | null — fly's second arc stage (swoop down to strike height), consumed by the "approach" phase check below once the first (soar up) command completes
     comboCount: 0, // Phase 4D, spec section 13: consecutive-turn hit streak for THIS fighter's own actions, cosmetic only (badge + minor pose flourish) — never read by any damage/combat logic.
     homeX: x,
   };
@@ -176,10 +191,27 @@ export function queueAction(anim, intent, opponentAnim, entry) {
     // then land the hit at contact range just like melee.
     const dir = opponentAnim.motion.x >= anim.motion.x ? 1 : -1;
     const approachX = opponentAnim.motion.x - dir * DEFAULT_MELEE_REACH;
+    anim.approachStyle = null; // only fly/hover set this — see the recovery-phase return trip in updateAnimation below
+    anim.pendingDescend = null; // only fly's two-stage arc sets this — see the "approach" phase handling in updateAnimation below
     if (intent.variant === "jump") {
       issueCommand(anim.motion, "jump");
-    } else if (intent.variant === "fly" || intent.variant === "hover") {
-      issueCommand(anim.motion, intent.variant, approachX, anim.motion.y - 40);
+    } else if (intent.variant === "fly") {
+      // Two-stage arc: soar up high across most of the distance, then
+      // (once that leg completes — see the "approach" phase handling in
+      // updateAnimation below) swoop down to strike at a height that
+      // actually lines up with a grounded opponent. A single straight
+      // shot to a 170px-high point would visually throw the punch well
+      // above their head.
+      const midX = anim.motion.x + (approachX - anim.motion.x) * 0.6;
+      issueCommand(anim.motion, "fly", midX, anim.motion.y - FLY_PEAK_ALTITUDE);
+      anim.pendingDescend = { targetX: approachX, targetY: anim.motion.groundY - FLY_STRIKE_ALTITUDE };
+      anim.approachStyle = "fly";
+    } else if (intent.variant === "hover") {
+      // A single smooth glide, already at a strike-correct height — no
+      // peak/descend staging, which is what makes it read as "soft" next
+      // to fly's dramatic swoop.
+      issueCommand(anim.motion, "hover", approachX, anim.motion.groundY - HOVER_STRIKE_ALTITUDE);
+      anim.approachStyle = "hover";
     } else {
       issueCommand(anim.motion, "run", approachX);
     }
@@ -265,8 +297,17 @@ export function updateAnimation(anim, dt, bounds, homeReturnX, alive = true) {
     const ap = anim.attackPhase;
     if (ap.phase === "approach") {
       if (!anim.motion.command) {
-        ap.phase = "windup";
-        ap.t = 0;
+        if (anim.pendingDescend) {
+          // Stage 1 (soar up) just finished — chain straight into stage 2
+          // (swoop down to strike height) without leaving "approach", so
+          // the state machine keeps reading this as one continuous flight
+          // rather than a stop-start.
+          issueCommand(anim.motion, "fly", anim.pendingDescend.targetX, anim.pendingDescend.targetY);
+          anim.pendingDescend = null;
+        } else {
+          ap.phase = "windup";
+          ap.t = 0;
+        }
       }
     } else {
       ap.t += dt;
@@ -303,8 +344,15 @@ export function updateAnimation(anim, dt, bounds, homeReturnX, alive = true) {
             impact = anim.pendingImpact;
             anim.pendingImpact = null;
           }
-          // Return to spawn position after the exchange.
-          issueCommand(anim.motion, "walk", homeReturnX ?? anim.homeX);
+          // Return to spawn position after the exchange — the same way
+          // they arrived, so a fighter who flew in also flies home instead
+          // of dropping to a ground-walk mid-air.
+          if (anim.approachStyle === "fly" || anim.approachStyle === "hover") {
+            issueCommand(anim.motion, anim.approachStyle, homeReturnX ?? anim.homeX, anim.motion.groundY);
+          } else {
+            issueCommand(anim.motion, "walk", homeReturnX ?? anim.homeX);
+          }
+          anim.approachStyle = null;
         } else {
           anim.attackPhase = null;
         }

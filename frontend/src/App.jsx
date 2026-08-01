@@ -373,7 +373,40 @@ export default function App() {
       // to attach to — everything else's sound cue rides along on that
       // turn's animation events (see the "turn:resolved" subscriber below).
       if (anim.motion.justStepped) newFrameCues.push("footstep");
-      if (anim.motion.justLanded) newFrameCues.push("landing_thud");
+      // Landing: silent for a soft hover ("like butter" — no cue, no VFX),
+      // the existing plain thud for a jump or any other grounded arrival,
+      // and a full hard-landing burst for a fly landing specifically —
+      // shockwave ring + kicked-up dust + debris + a camera shake, timed
+      // off the same justLanded flag jump-landings already used (a fly
+      // command targeting groundY naturally flips grounded true through
+      // the normal gravity/ground-contact check once the command clears,
+      // same as everything else that lands).
+      if (anim.motion.justLanded) {
+        if (anim.motion.mode === "fly") {
+          newFrameCues.push("landing_thud");
+          emitParticles(particleSystemRef.current, "explosion_ring", anim.motion.x, anim.motion.y, { intensity: "medium" });
+          emitParticles(particleSystemRef.current, "dust", anim.motion.x, anim.motion.y, { intensity: "high" });
+          emitParticles(particleSystemRef.current, "debris", anim.motion.x, anim.motion.y, { intensity: "medium" });
+          triggerCameraEvent(cameraRef.current, "medium-shake");
+        } else if (anim.motion.mode !== "hover") {
+          newFrameCues.push("landing_thud");
+        }
+      }
+      // Takeoff: the hard-flight counterpart to the hard landing above —
+      // hover deliberately gets none of this at all (spec: soft/smooth
+      // takeoff, no burst, hovers "like butter").
+      if (anim.motion.justTookOff && anim.motion.mode === "fly") {
+        emitParticles(particleSystemRef.current, "explosion_ring", anim.motion.x, anim.motion.y, { intensity: "medium" });
+        emitParticles(particleSystemRef.current, "dust", anim.motion.x, anim.motion.y, { intensity: "high" });
+        triggerCameraEvent(cameraRef.current, "small-shake");
+      }
+      // A light continuous trail for the whole traversal, not just the two
+      // endpoints — probabilistic emission (~14/s) instead of a new
+      // per-fighter accumulator field, since this is purely decorative and
+      // only one fighter is usually airborne at a time.
+      if ((anim.motion.mode === "fly" || anim.motion.mode === "hover") && anim.motion.command && Math.random() < dt * 14) {
+        emitParticles(particleSystemRef.current, "aura_trail", anim.motion.x - anim.motion.facing * 14, anim.motion.y, { intensity: anim.motion.mode === "fly" ? "medium" : "low" });
+      }
       if (anim.motion.justVanished || anim.motion.justArrived) {
         const flavor = TELEPORT_PARTICLES[anim.motion.teleportVariant] || TELEPORT_PARTICLES.arcane;
         // Vanish burst plays at the ORIGIN (stashed on the command before
