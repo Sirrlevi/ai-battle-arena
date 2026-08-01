@@ -62,7 +62,32 @@ const TELEPORT_PARTICLES = {
   shadow: { ring: "magic_circle", spark: "energy", color: "#7B4FE0" },
   arcane: { ring: "magic_circle", spark: "energy", color: "#B98CFF" },
 };
-const TORSO_OFFSET_Y = -80; // where projectiles launch from / aim at, relative to a fighter's feet
+const TORSO_OFFSET_Y = -80; // where projectiles AIM at (the target's center of mass), relative to a fighter's feet
+// Where a ranged attack visually LAUNCHES FROM, relative to a fighter's
+// feet — worked out from characterAnimation.js's RIG proportions (HIP_Y
+// -55, CHEST_LEN 29, NECK_LEN 13, HEAD_R+HEAD_GAP 17 => head-center ≈
+// -114; a raised ~horizontal casting arm keeps the hand at ~shoulder/
+// chest height, ≈ -84, same as TORSO_OFFSET_Y). Heat-vision/laser always
+// fires from the face — everything else (energy blast, fireball, orb,
+// arrow, etc.) launches from the extended, forward-reaching hand.
+const FACE_OFFSET_Y = -114;
+const HAND_CAST_OFFSET_Y = -84;
+const HAND_FORWARD_REACH = 46; // how far forward of the root the casting hand sits at full extension
+function projectileOrigin(anim, variant) {
+  const facing = anim.motion.facing >= 0 ? 1 : -1;
+  if (variant === "laser") {
+    return { x: anim.motion.x + facing * 10, y: anim.motion.y + FACE_OFFSET_Y };
+  }
+  return { x: anim.motion.x + facing * HAND_FORWARD_REACH, y: anim.motion.y + HAND_CAST_OFFSET_Y };
+}
+// How long (ms) to hold the battle-log text back after a turn resolves,
+// so it appears in sync with the strike actually landing instead of the
+// instant it's computed. ~260ms = windup (160ms) + strike (120ms) *
+// ~0.85 impact fraction — the same timing handleImpact's own hit
+// registration already uses (see MELEE_IMPACT_FRACTION /
+// DEFAULT_IMPACT_FRACTION in animationController.js), so the text and the
+// character's own flinch land at roughly the same moment.
+const LOG_SYNC_DELAY_MS = 260;
 let dmgNumberId = 1;
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
@@ -304,14 +329,16 @@ export default function App() {
       // animationController.js for why this specific trigger (a ranged
       // attack met with a "counter" response) is the one beam-clash
       // scenario this turn-based battle loop can actually produce.
+      const originA = projectileOrigin(actorAnim, impact.projectileVariant);
+      const originB = projectileOrigin(targetAnim, impact.counterVariant);
       spawnBeamClashPair(projectileManagerRef.current, {
         variantA: impact.projectileVariant,
-        fromAX: actorAnim.motion.x, fromAY: actorAnim.motion.y + TORSO_OFFSET_Y,
+        fromAX: originA.x, fromAY: originA.y,
         toAX: targetAnim.motion.x, toAY: targetAnim.motion.y + TORSO_OFFSET_Y,
         ownerAKey: actorAnim.key, targetAKey: targetKey,
         payloadA: { damage: impact.damage, result: impact.result },
         variantB: impact.counterVariant,
-        fromBX: targetAnim.motion.x, fromBY: targetAnim.motion.y + TORSO_OFFSET_Y,
+        fromBX: originB.x, fromBY: originB.y,
         toBX: actorAnim.motion.x, toBY: actorAnim.motion.y + TORSO_OFFSET_Y,
         ownerBKey: targetKey, targetBKey: actorAnim.key,
         payloadB: { damage: impact.counterDamage, result: "hit" },
@@ -326,10 +353,11 @@ export default function App() {
     }
 
     if (impact.spawnProjectile) {
+      const origin = projectileOrigin(actorAnim, impact.projectileVariant);
       spawnProjectile(projectileManagerRef.current, {
         variant: impact.projectileVariant,
-        fromX: actorAnim.motion.x,
-        fromY: actorAnim.motion.y + TORSO_OFFSET_Y,
+        fromX: origin.x,
+        fromY: origin.y,
         toX: targetAnim.motion.x,
         toY: targetAnim.motion.y + TORSO_OFFSET_Y,
         ownerKey: actorAnim.key,
@@ -366,6 +394,26 @@ export default function App() {
     for (const f of currentRoster) {
       const anim = animRef.current[f.key];
       if (!anim) continue;
+
+      // Face the opponent whenever genuinely at rest — no active motion
+      // command and not mid-attack (an attack manages its own facing via
+      // the dash/approach direction toward the opponent). Without this, a
+      // fighter's facing was simply whatever it last was from their last
+      // movement command — easy to end up "facing away" after returning
+      // home, getting knocked back, or just never having moved yet — which
+      // was the actual root cause behind fighters visually facing away
+      // from each other at rest, and (since every attack pose in
+      // characterAnimation.js mirrors off this same facing value) strikes
+      // swinging in the wrong direction entirely.
+      if (f.alive && !anim.motion.command && !anim.attackPhase) {
+        const opponent = currentRoster.find((o) => o.key !== f.key);
+        const opponentAnim = opponent ? animRef.current[opponent.key] : null;
+        const opponentX = opponentAnim ? opponentAnim.motion.x : opponent?.position.x;
+        if (opponentX !== undefined && Math.abs(opponentX - anim.motion.x) > 1) {
+          anim.motion.facing = opponentX >= anim.motion.x ? 1 : -1;
+        }
+      }
+
       const { impact, state } = updateAnimation(anim, dt, MOTION_BOUNDS, anim.homeX, f.alive);
       anim.state = state;
       if (impact) handleImpact(anim, impact.targetKey, impact);
@@ -739,8 +787,6 @@ export default function App() {
       stateRef.current = st.map((f) => ({ ...f, status: [...f.status], cooldowns: { ...f.cooldowns } }));
       setRoster(stateRef.current);
       lastRealityRef.current = reality;
-      setLog((prev) => [...prev, entry, ...(narration ? [{ system: true, text: `📣 ${narration}` }] : [])]);
-      setLastEntry(entry);
 
       // If the debug panels are open, keep them in sync with what just happened.
       if (memoryPanelOpen) refreshMemory();
@@ -756,6 +802,20 @@ export default function App() {
         queueAction(attackerAnim, intent, defenderAnim, entry);
         registerTurnOutcome(attackerAnim, entry.result === "hit" || entry.result === "lethal");
       }
+
+      // The log text (damage dealt, hit/miss, etc.) previously appeared the
+      // instant the turn was computed — well before the attacker had even
+      // started moving. Deferred here to land close to when the strike
+      // actually connects instead: LOG_SYNC_DELAY_MS tracks the same
+      // windup + (strike * impact fraction) timing handleImpact's own hit
+      // registration uses (see MELEE_IMPACT_FRACTION / DEFAULT_IMPACT_FRACTION
+      // in animationController.js) — text and the character's own visual
+      // reaction now land at roughly the same moment. The animation itself
+      // (queueAction, just above) is NOT delayed — only this display update.
+      setTimeout(() => {
+        setLog((prev) => [...prev, entry, ...(narration ? [{ system: true, text: `📣 ${narration}` }] : [])]);
+        setLastEntry(entry);
+      }, LOG_SYNC_DELAY_MS);
 
       if (!defender.alive) {
         setWinnerKey(attacker.key);

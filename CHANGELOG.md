@@ -244,11 +244,92 @@ flight) — those already looked reasonable and don't depend on absolute
 altitude, only relative joint angles, so they carry over correctly at the
 new heights with no changes needed.
 
+## 9. Facing/mirroring — the real reason strikes were missing, plus ranged-attack origin points and log sync (`characterAnimation.js`, `App.jsx`)
+
+This is a deeper bug than #7 above caught — worth being direct about that.
+#7 fixed reach and impact timing, both genuinely wrong, but a screenshot
+showing both fighters facing away from each other (and hands drawn on the
+same screen-side) pointed at something underneath both problems.
+
+**Root cause: `setActingArm` picked the correct arm but never mirrored the
+angle.** Every joint angle in this file is authored on an absolute
+"0deg=down, 90deg=toward +x" convention (this file's own header comment),
+and `armL`/`armR` are fixed screen-side shoulder positions in
+`Stickman.jsx` (`armL` always the left shoulder, `armR` always the right
+— never swapped). `setActingArm` correctly picked *which* arm should act
+based on facing (left shoulder when facing left, right when facing
+right)... but hand the SAME unmirrored angle values to whichever arm won.
+Angle 88° always means "swing toward screen-right," full stop — so a
+facing-left fighter's (correctly-picked) left arm would still swing
+rightward, away from a left-side opponent, not toward them. This affected
+every arm-based attack (punch, slash, uppercut, and the generic ranged
+cast) for roughly half of all engagements — whichever fighter happened to
+be facing left. Fixed by mirroring (negating) both the upper AND lower
+angle when facing is negative — lower is relative to upper (Stickman.jsx
+computes the hand position from their sum), so only the *cumulative*
+angle mirrors correctly if both do. Kick/roundhouse had the same gap in
+miniature (only the upper leg angle was mirrored, not the knee bend) —
+fixed the same way. `chestLean`, which several of these poses feed into
+the neck/head lean chain, had the same one-sided gap in punch/slash/
+uppercut/kick — fixed for consistency.
+
+**A second, separate bug: nothing made an idle fighter face their
+opponent.** `facing` was purely a side-effect of the last movement
+command's direction (which way you last walked/dashed) — there was no
+"look at your opponent" logic at rest at all. Both fighters default to
+`facing: 1` at spawn, so at the exact moment in your screenshot (idle,
+between turns), there was a real chance either or both fighters were
+facing the wrong way — which, combined with the mirroring bug above,
+compounds badly (wrong facing feeding an unmirrored angle could
+coincidentally look "less wrong," which is probably why this wasn't
+always obviously broken). Fixed with a small per-frame check in `App.jsx`'s
+game loop: whenever a fighter has no active motion command and isn't
+mid-attack, their facing is set to point at their opponent's current
+position. Attacks still manage their own facing during the approach (via
+whichever way they're dashing/flying in) — this only fills the "just
+standing there" gap.
+
+**Ranged attacks — origin points, and two new dedicated poses.** Every
+projectile previously launched from a single, fixed torso-height point
+regardless of type. Now:
+- **Laser/heat-vision** always launches from the face (~head height,
+  worked out from the rig's own proportions), with a new `poseLaserCast`
+  that doesn't raise the arms at all — just a focused stance and a head
+  recoil that snaps back fast the instant the beam fires and eases to
+  neutral as it cuts off, like the beam has its own kickback pressure.
+- **Everything else** (energy blast, fireball, orb, gravity well, etc.)
+  launches from the extended hand, offset forward in the facing
+  direction, with `poseCast`'s peak angle pushed from 58° to ~90°
+  (horizontal) so a channeled blast reads as actually aimed at the
+  opponent rather than off at an angle — this game keeps both fighters at
+  roughly the same height, so "horizontal, in the facing direction" *is*
+  "aimed at the opponent" here.
+- **Arrow** gets its own `poseArrowCast` — a single-arm aimed draw (bow-
+  string read) instead of the generic two-handed channel, since a thrown/
+  loosed precision shot reads differently from a channeled blast.
+
+**Battle log sync.** The log text (damage, hit/miss, ability description)
+previously appeared the instant a turn was computed — before the attacker
+had even started their dash-in, let alone landed the hit. The animation
+itself wasn't delayed (`queueAction` still fires immediately, so movement
+stays responsive), only the log/narration display now waits
+`LOG_SYNC_DELAY_MS` (260ms — windup + strike \* the same impact fraction
+`handleImpact` itself uses, so text and the character's own flinch land
+at roughly the same moment) before appearing.
+
+**What I did not change:** camera shake and hit-particles from
+`turn:resolved` still fire at the old (immediate) timing — that's a
+separate, pre-existing timing gap from before the Phase 4 animation delay
+existed, and fixing it means touching the event-bus subscriber rather
+than just display text. Flagging it rather than bundling in an
+unrequested, less-scoped change: happy to take it on as its own item if
+you want it.
+
 ## Files touched across this session
 `frontend/src/App.jsx`, `frontend/src/lib/movementController.js`,
 `frontend/src/lib/actionInterpreter.js`, `frontend/src/lib/animationController.js`,
-`frontend/src/components/Stickman.jsx`, `frontend/src/components/Projectile.jsx`,
-`backend/src/lib/memory/promptBuilder.js`.
+`frontend/src/lib/characterAnimation.js`, `frontend/src/components/Stickman.jsx`,
+`frontend/src/components/Projectile.jsx`, `backend/src/lib/memory/promptBuilder.js`.
 
 No backend routes, deployment config, database, character/power/ability
 schema, or UI layout were touched.

@@ -108,12 +108,25 @@ function basePose() {
 }
 
 function setActingArm(p, facing, upper, lower, otherUpper = 8, otherLower = 12) {
+  // upper/lower are authored assuming facing-right (+1) — 0deg=down,
+  // 90deg=toward +x, per this file's header convention. armL/armR are
+  // fixed screen-side shoulder positions in Stickman.jsx (armL always the
+  // left shoulder, armR always the right), so picking which arm acts is
+  // NOT enough on its own: a facing-left strike needs the angle values
+  // themselves mirrored too, or the "correctly picked" arm still swings
+  // toward +x — i.e. away from a left-side opponent instead of toward
+  // them. Both upper and lower are negated (not just upper) because lower
+  // is relative to upper (down(elbow, upper+lower, ...) in Stickman.jsx),
+  // so the cumulative forearm angle only mirrors correctly if both do.
+  const m = facing >= 0 ? 1 : -1;
+  const acting = { upper: upper * m, lower: lower * m };
+  const resting = { upper: otherUpper * m, lower: otherLower * m };
   if (facing >= 0) {
-    p.armR = { upper, lower };
-    p.armL = { upper: otherUpper, lower: otherLower };
+    p.armR = acting;
+    p.armL = resting;
   } else {
-    p.armL = { upper, lower };
-    p.armR = { upper: otherUpper, lower: otherLower };
+    p.armL = acting;
+    p.armR = resting;
   }
 }
 
@@ -269,7 +282,7 @@ function posePunch(phase, prog, f) {
   else { u = mix(88, 18, prog); l = mix(-8, 10, prog); waist = mix(11, 0, prog); chest = mix(6, 0, prog); }
   setActingArm(p, f, u, l);
   p.waistLean = waist * f;
-  p.chestLean = chest;
+  p.chestLean = chest * f;
   p.crouch = 0.1;
   return p;
 }
@@ -282,7 +295,7 @@ function poseSlash(phase, prog, f) {
   else { u = mix(78, 26, prog); l = mix(-16, 12, prog); waist = mix(16, 0, prog); chest = mix(10, 0, prog); }
   setActingArm(p, f, u, l);
   p.waistLean = waist * f;
-  p.chestLean = chest;
+  p.chestLean = chest * f;
   p.crouch = 0.08;
   return p;
 }
@@ -296,7 +309,7 @@ function poseUppercut(phase, prog, f) {
   setActingArm(p, f, u, l);
   p.crouch = crouch;
   p.hop = hop;
-  p.chestLean = phase === "strike" ? -8 : 3;
+  p.chestLean = (phase === "strike" ? -8 : 3) * f;
   return p;
 }
 
@@ -308,14 +321,14 @@ function poseRoundhouse(phase, prog, f) {
   else { legU = mix(96, 8, prog); legL = mix(8, 10, prog); waist = mix(24, 0, prog); armSpread = mix(40, 10, prog); }
   const kickLeg = f >= 0 ? "legR" : "legL";
   const standLeg = f >= 0 ? "legL" : "legR";
-  p[kickLeg] = { upper: legU * f, lower: legL };
-  p[standLeg] = { upper: -6 * f, lower: 12 };
+  p[kickLeg] = { upper: legU * f, lower: legL * f };
+  p[standLeg] = { upper: -6 * f, lower: 12 * f };
   p.armL.upper = -armSpread;
   p.armR.upper = armSpread;
   p.armL.lower = 20;
   p.armR.lower = 20;
   p.waistLean = waist * f;
-  p.chestLean = -4;
+  p.chestLean = -4 * f;
   p.crouch = 0.12;
   return p;
 }
@@ -328,41 +341,96 @@ function poseKick(phase, prog, f) {
   else { legU = mix(84, 6, prog); legL = mix(-4, 10, prog); chest = mix(-12, 0, prog); }
   const kickLeg = f >= 0 ? "legR" : "legL";
   const standLeg = f >= 0 ? "legL" : "legR";
-  p[kickLeg] = { upper: legU * f, lower: legL };
-  p[standLeg] = { upper: -4 * f, lower: 14 };
+  p[kickLeg] = { upper: legU * f, lower: legL * f };
+  p[standLeg] = { upper: -4 * f, lower: 14 * f };
   p.armL.upper = 22;
   p.armR.upper = 22;
-  p.chestLean = chest;
+  p.chestLean = chest * f;
   p.crouch = 0.06;
   return p;
 }
 
 function poseCast(phase, prog, f) {
-  // Ranged / self-directed abilities (beam, projectile, heal, shield,
-  // transformation-flavored casts) — the engine tells the renderer THAT
-  // an ability resolved this way (ability.range !== "melee" or no verdict
-  // at all), never which pose looks best, so this is the cosmetic default
-  // for "not a punch/kick/slash."
+  // Two-handed channel — the default look for a ranged ability that
+  // doesn't have a more specific pose below (energy blast, fireball, orb,
+  // gravity well, heal/shield, transformation...). The engine tells the
+  // renderer THAT an ability resolved this way, never which pose looks
+  // best, so this is the cosmetic default for "not a punch/kick/slash/
+  // laser/arrow." Peaks near 90deg (horizontal, in the facing direction)
+  // rather than the old 58deg — since this game keeps both fighters at
+  // ~the same height, "horizontal in the facing direction" reads as
+  // genuinely aimed at the opponent, which "u" wasn't reaching before.
   const p = basePose();
   let u, chest;
-  if (phase === "windup") { u = mix(10, -76, prog); chest = mix(0, -10, prog); }
-  else if (phase === "strike") { u = mix(-76, 58, prog); chest = mix(-10, 8, prog); }
-  else { u = mix(58, 14, prog); chest = mix(8, 0, prog); }
-  p.armL.upper = u;
-  p.armR.upper = u;
-  p.armL.lower = phase === "strike" ? -6 : 16;
-  p.armR.lower = phase === "strike" ? -6 : 16;
-  p.chestLean = chest;
+  if (phase === "windup") { u = mix(10, -70, prog); chest = mix(0, -10, prog); }
+  else if (phase === "strike") { u = mix(-70, 84, prog); chest = mix(-10, 8, prog); }
+  else { u = mix(84, 14, prog); chest = mix(8, 0, prog); }
+  p.armL.upper = u * f;
+  p.armR.upper = u * f;
+  p.armL.lower = (phase === "strike" ? -6 : 16) * f;
+  p.armR.lower = (phase === "strike" ? -6 : 16) * f;
+  p.chestLean = chest * f;
   p.crouch = 0.1;
   p.stance = 1.1;
   return p;
 }
 
+function poseLaserCast(phase, prog, f) {
+  // Heat-vision / eye-beam: the beam fires from the face (see App.jsx's
+  // projectileOrigin — this is the one ranged variant that doesn't launch
+  // from a hand), so this doesn't raise the arms like poseCast — just a
+  // focused ready stance and a head recoil, as if firing the beam kicks
+  // the head back a touch under its own pressure, snapping back fast and
+  // then easing to neutral as the beam cuts off.
+  const p = basePose();
+  let headKick, chest;
+  if (phase === "windup") {
+    headKick = mix(0, -3, prog); // a slight forward focus-lean before firing
+    chest = mix(0, -3, prog);
+  } else if (phase === "strike") {
+    const snap = clamp(prog / 0.3, 0, 1); // fast kick-back, then holds under the beam's own "pressure"
+    headKick = mix(-3, 15, snap);
+    chest = mix(-3, 4, snap);
+  } else {
+    headKick = mix(15, 0, prog);
+    chest = mix(4, 0, prog);
+  }
+  p.headTilt = headKick * -f; // recoils backward, away from the direction the beam exits
+  p.chestLean = chest * 0.4 * f;
+  p.armL.upper = 12;
+  p.armR.upper = 12;
+  p.armL.lower = 14;
+  p.armR.lower = 14;
+  p.crouch = 0.06;
+  return p;
+}
+
+function poseArrowCast(phase, prog, f) {
+  // A precision, single-arm aimed shot instead of a two-handed channel —
+  // the forward-side arm extends straight at the opponent (nearly
+  // straight elbow), the other arm draws back toward the chest like
+  // anchoring a bowstring, releasing on strike.
+  const p = basePose();
+  let aimU, drawU, drawL, chest;
+  if (phase === "windup") { aimU = mix(10, 82, prog); drawU = mix(10, -50, prog); drawL = mix(12, 55, prog); chest = mix(0, -6, prog); }
+  else if (phase === "strike") { aimU = mix(82, 90, prog); drawU = mix(-50, -66, prog); drawL = mix(55, 70, prog); chest = mix(-6, 2, prog); }
+  else { aimU = mix(90, 14, prog); drawU = mix(-66, 10, prog); drawL = mix(70, 12, prog); chest = mix(2, 0, prog); }
+  const aimArm = f >= 0 ? "armR" : "armL";
+  const drawArm = f >= 0 ? "armL" : "armR";
+  p[aimArm] = { upper: aimU * f, lower: -2 * f };
+  p[drawArm] = { upper: drawU * f, lower: drawL * f };
+  p.chestLean = chest * f;
+  p.crouch = 0.08;
+  return p;
+}
+
 const MELEE_VARIANTS = { punch: posePunch, kick: poseKick, slash: poseSlash, uppercut: poseUppercut, roundhouse: poseRoundhouse };
+const CAST_VARIANTS = { laser: poseLaserCast, arrow: poseArrowCast };
+
 
 function poseAttacking(attackPhase, facing, seed, now) {
   if (!attackPhase) return poseIdle(seed, now);
-  const gen = MELEE_VARIANTS[attackPhase.variant] || poseCast;
+  const gen = MELEE_VARIANTS[attackPhase.variant] || CAST_VARIANTS[attackPhase.variant] || poseCast;
   const prog = phaseProgress(attackPhase);
   return gen(attackPhase.phase, prog, facing >= 0 ? 1 : -1);
 }
