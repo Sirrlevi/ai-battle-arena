@@ -149,8 +149,8 @@ export function queueAction(anim, intent, opponentAnim, entry) {
     // loop's strict turn alternation can actually produce.
     const isBeamClash = entry.defense?.chosenResponse === "counter" && (entry.counterDamage || 0) > 0;
     anim.pendingImpact = isBeamClash
-      ? { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, spawnBeamClash: true, projectileVariant: variant, counterVariant: "energy", counterDamage: entry.counterDamage }
-      : { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, projectileVariant: variant, spawnProjectile: true };
+      ? { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, spawnBeamClash: true, projectileVariant: variant, counterVariant: "energy", counterDamage: entry.counterDamage, power: intent.power }
+      : { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, projectileVariant: variant, spawnProjectile: true, power: intent.power };
     return;
   }
 
@@ -225,7 +225,7 @@ export function queueAction(anim, intent, opponentAnim, entry) {
   const approachX = opponentAnim.motion.x - dir * reachFor(intent.variant);
   issueCommand(anim.motion, "dash", approachX);
   anim.attackPhase = { variant: intent.variant, phase: "approach", t: 0 };
-  anim.pendingImpact = { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result };
+  anim.pendingImpact = { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, power: intent.power };
 }
 
 // Max whole-body stagger rotation (degrees) on the heaviest hits — decays
@@ -236,13 +236,13 @@ export function queueAction(anim, intent, opponentAnim, entry) {
 // else in this file.
 const MAX_HIT_STAGGER_DEGREES = 22;
 
-export function applyHitReaction(anim, fromX, damage = 0) {
+export function applyHitReaction(anim, fromX, damage = 0, knockbackMultiplier = 1) {
   anim.hitTimer = HIT_REACT_DURATION;
   anim.flashTimer = FLASH_DURATION;
   anim.lastHitDamage = damage; // Phase 4A: see field comment in createAnimState above
   const dir = anim.motion.x >= fromX ? 1 : -1;
   anim.hitDir = dir; // which way they were knocked — see hitStaggerDegrees below
-  anim.motion.vx = dir * KNOCKBACK_SPEED;
+  anim.motion.vx = dir * KNOCKBACK_SPEED * knockbackMultiplier;
 }
 
 /**

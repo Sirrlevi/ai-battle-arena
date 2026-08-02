@@ -65,10 +65,10 @@ function baseProjectile({ variant, fromX, fromY, toX, toY, speed }) {
   };
 }
 
-export function spawnProjectile(manager, { variant = "energy", fromX, fromY, toX, toY, ownerKey, targetKey, payload, bounds }) {
+export function spawnProjectile(manager, { variant = "energy", fromX, fromY, toX, toY, ownerKey, targetKey, payload, bounds, color, glowColor }) {
   const speed = SPEEDS[variant] || SPEEDS.energy;
   const p = baseProjectile({ variant, fromX, fromY, toX, toY, speed });
-  Object.assign(p, { ownerKey, targetKey, payload, bounds, stage: "final" });
+  Object.assign(p, { ownerKey, targetKey, payload, bounds, stage: "final", color, glowColor });
   manager.items.push(p);
   return p;
 }
@@ -89,8 +89,8 @@ export function spawnProjectile(manager, { variant = "energy", fromX, fromY, toX
  * spawnProjectile from that point on, including its own onArrive.
  */
 export function spawnBeamClashPair(manager, {
-  variantA, fromAX, fromAY, toAX, toAY, ownerAKey, targetAKey, payloadA,
-  variantB, fromBX, fromBY, toBX, toBY, ownerBKey, targetBKey, payloadB,
+  variantA, fromAX, fromAY, toAX, toAY, ownerAKey, targetAKey, payloadA, colorA, glowColorA,
+  variantB, fromBX, fromBY, toBX, toBY, ownerBKey, targetBKey, payloadB, colorB, glowColorB,
   onClash,
 }) {
   const clashX = (fromAX + fromBX) / 2;
@@ -99,8 +99,8 @@ export function spawnBeamClashPair(manager, {
 
   const a = baseProjectile({ variant: variantA, fromX: fromAX, fromY: fromAY, toX: clashX, toY: clashY, speed: SPEEDS[variantA] || SPEEDS.energy });
   const b = baseProjectile({ variant: variantB, fromX: fromBX, fromY: fromBY, toX: clashX, toY: clashY, speed: SPEEDS[variantB] || SPEEDS.energy });
-  Object.assign(a, { ownerKey: ownerAKey, targetKey: targetAKey, payload: payloadA, stage: "toClash", pairId, finalX: toAX, finalY: toAY, partnerReached: false, clashFired: false });
-  Object.assign(b, { ownerKey: ownerBKey, targetKey: targetBKey, payload: payloadB, stage: "toClash", pairId, finalX: toBX, finalY: toBY, partnerReached: false, clashFired: false });
+  Object.assign(a, { ownerKey: ownerAKey, targetKey: targetAKey, payload: payloadA, stage: "toClash", pairId, finalX: toAX, finalY: toAY, partnerReached: false, clashFired: false, color: colorA, glowColor: glowColorA });
+  Object.assign(b, { ownerKey: ownerBKey, targetKey: targetBKey, payload: payloadB, stage: "toClash", pairId, finalX: toBX, finalY: toBY, partnerReached: false, clashFired: false, color: colorB, glowColor: glowColorB });
   a.partner = b;
   b.partner = a;
   a.onClash = b.onClash = onClash;

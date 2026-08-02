@@ -5,6 +5,7 @@ import { createFighter, resetFighterCombatState, computeSpawnPositions, ARENA_WI
 import { resolveAction, tickStatus } from "./lib/battleEngine.js";
 import { interpretAction } from "./lib/actionInterpreter.js";
 import { createAnimState, queueAction, updateAnimation, applyHitReaction, triggerTransformation, registerTurnOutcome, hitStaggerDegrees } from "./lib/animationController.js";
+import { PHYSICS_TIERS } from "./lib/powerCatalog.js";
 import { createProjectileManager, spawnProjectile, spawnBeamClashPair, updateProjectiles } from "./lib/projectileManager.js";
 import { createCamera, updateCamera, triggerCameraEvent } from "./lib/cameraController.js";
 import { createEventBus, on, emit, buildAnimationEvents, buildDebugSnapshot, cameraEventFor, particleEventsFor } from "./lib/animationEventBus.js";
@@ -337,6 +338,7 @@ export default function App() {
         toAX: targetAnim.motion.x, toAY: targetAnim.motion.y + TORSO_OFFSET_Y,
         ownerAKey: actorAnim.key, targetAKey: targetKey,
         payloadA: { damage: impact.damage, result: impact.result },
+        colorA: impact.power?.color, glowColorA: impact.power?.glow,
         variantB: impact.counterVariant,
         fromBX: originB.x, fromBY: originB.y,
         toBX: actorAnim.motion.x, toBY: actorAnim.motion.y + TORSO_OFFSET_Y,
@@ -363,17 +365,27 @@ export default function App() {
         toY: targetAnim.motion.y + TORSO_OFFSET_Y,
         ownerKey: actorAnim.key,
         targetKey,
-        payload: { damage: impact.damage, result: impact.result },
+        payload: { damage: impact.damage, result: impact.result, power: impact.power },
         bounds: MOTION_BOUNDS,
+        color: impact.power?.color,
+        glowColor: impact.power?.glow,
       });
       return;
     }
 
     if (impact.result === "hit" || impact.result === "lethal") {
-      applyHitReaction(targetAnim, actorAnim.motion.x, impact.damage);
+      const tier = PHYSICS_TIERS[impact.power?.tier] || PHYSICS_TIERS.medium;
+      applyHitReaction(targetAnim, actorAnim.motion.x, impact.damage, tier.knockback);
       triggerHitstop(impact.damage, impact.result === "lethal");
       pushDamageNumber(targetAnim.motion.x, targetAnim.motion.y + TORSO_OFFSET_Y, impact.damage, HIT);
-      triggerImpactFrame(targetAnim.motion.x, impact.damage, impact.result === "lethal");
+      triggerImpactFrame(targetAnim.motion.x, impact.damage, impact.result === "lethal", tier.impact);
+      // Melee hits never had a colored particle burst before — every
+      // catalog-matched power now gets one at the point of contact (torso
+      // height, matching the damage-number spawn point), tinted by its
+      // element instead of the same generic flash for every punch/kick.
+      if (impact.power) {
+        emitParticles(particleSystemRef.current, impact.power.particle, targetAnim.motion.x, targetAnim.motion.y + TORSO_OFFSET_Y, { intensity: impact.power.tier === "massive" || impact.power.tier === "heavy" ? "high" : "medium", color: impact.power.color });
+      }
     }
   }
 
@@ -382,9 +394,13 @@ export default function App() {
   // critical/lethal hits (damage >= 15, or any lethal blow) so it reads as
   // a meaningful beat rather than noise on every routine poke. Shared by
   // both the direct-hit path above and the projectile-arrival path below.
-  function triggerImpactFrame(atX, damage, lethal) {
+  // tierMultiplier (from powerCatalog.js's PHYSICS_TIERS) leans a matched
+  // power's own weight on top of the damage-driven scaling that already
+  // exists — a "massive"-tier boulder smash punches harder than a "light"
+  // dart landing the same numeric damage.
+  function triggerImpactFrame(atX, damage, lethal, tierMultiplier = 1) {
     if (damage < 15 && !lethal) return;
-    const strength = Math.min(1, damage / 40) + (lethal ? 0.3 : 0);
+    const strength = (Math.min(1, damage / 40) + (lethal ? 0.3 : 0)) * tierMultiplier;
     triggerCameraEvent(cameraRef.current, "impact-flash", { intensity: 0.35 + strength * 0.45 });
     triggerCameraEvent(cameraRef.current, "impact-zoom", { x: atX, intensity: 0.04 + strength * 0.09 });
     triggerCameraEvent(cameraRef.current, "motion-blur", { intensity: 0.5 + strength * 0.5 });
@@ -502,10 +518,11 @@ export default function App() {
         if (p.payload?.result === "hit" || p.payload?.result === "lethal") {
           const targetAnim = animRef.current[p.targetKey];
           if (targetAnim) {
-            applyHitReaction(targetAnim, p.fromX, p.payload.damage);
+            const tier = PHYSICS_TIERS[p.payload.power?.tier] || PHYSICS_TIERS.medium;
+            applyHitReaction(targetAnim, p.fromX, p.payload.damage, tier.knockback);
             triggerHitstop(p.payload.damage, p.payload.result === "lethal");
             pushDamageNumber(p.toX, p.toY, p.payload.damage, HIT);
-            triggerImpactFrame(p.toX, p.payload.damage, p.payload.result === "lethal");
+            triggerImpactFrame(p.toX, p.payload.damage, p.payload.result === "lethal", tier.impact);
           }
         }
       },

@@ -6,6 +6,8 @@
 // and new wording all route through the same categories without code
 // changes, and adding a new category later is just another entry below.
 
+import { matchPower } from "./powerCatalog.js";
+
 const CATEGORY_KEYWORDS = [
   { category: "teleport", variant: "teleport", words: ["teleport", "blink", "phase", "warp", "vanish", "flicker", "shadowstep", "shadow step", "short-hop"] },
   { category: "projectile", variant: "laser", words: ["laser", "beam", "ray"] },
@@ -26,9 +28,12 @@ const CATEGORY_KEYWORDS = [
 ];
 
 /**
- * Returns { category, variant } for a resolved log entry. `category` is one
- * of "melee" | "projectile" | "movement" | "teleport" | "block" | "melee"
- * (default).
+ * Returns { category, variant, power? } for a resolved log entry. `category`
+ * is one of "melee" | "projectile" | "movement" | "teleport" | "block" |
+ * "melee" (default). `power`, when present, is the matched entry from
+ * powerCatalog.js's 100-power catalog — color/particle/tier data for
+ * animationController.js to apply; every existing caller only ever needed
+ * category/variant, so this is purely additive.
  */
 export function interpretAction(entry) {
   if (entry.action === "Defend" || entry.result === "defend") {
@@ -41,6 +46,17 @@ export function interpretAction(entry) {
   // guess from prose if the engine already knows this was a teleport.
   if (entry.eventType === "teleport" || entry.result === "teleport") {
     return { category: "teleport", variant: "teleport" };
+  }
+
+  // The 100-power catalog is checked first — far richer, more specific
+  // keyword coverage than the handful of categories below, so a specific
+  // match ("chain lightning") wins over a shorter generic one ("blast")
+  // the older list alone would have picked. A miss here just falls
+  // through to the exact same behavior as before this catalog existed.
+  const power = matchPower(entry.ability_name, entry.description);
+  if (power) {
+    if (power.cat === "melee") return { category: "melee", variant: power.meleeHint, power };
+    if (power.cat === "projectile") return { category: "projectile", variant: power.shape, power };
   }
 
   const text = `${entry.ability_name || ""} ${entry.description || ""}`.toLowerCase();

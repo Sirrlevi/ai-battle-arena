@@ -24,7 +24,14 @@ const VARIANT_STYLE = {
 };
 
 export default function Projectile({ projectile }) {
-  const style = VARIANT_STYLE[projectile.variant] || VARIANT_STYLE.orb;
+  const baseStyle = VARIANT_STYLE[projectile.variant] || VARIANT_STYLE.orb;
+  // A spawn-time color override (see App.jsx's projectileOrigin/handleImpact
+  // — sourced from powerCatalog.js's 100-power catalog when the resolved
+  // ability matched one) takes priority over the variant's own default
+  // tint, so e.g. a catalog-matched "toxic cloud" reads sickly green even
+  // though it renders with the same "energy" shape as everything else
+  // that doesn't have a more specific silhouette.
+  const style = { fill: projectile.color || baseStyle.fill, glow: projectile.glowColor || baseStyle.glow };
   const angle = (Math.atan2(projectile.toY - projectile.fromY, projectile.toX - projectile.fromX) * 180) / Math.PI;
   const variant = projectile.variant;
 

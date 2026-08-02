@@ -131,17 +131,27 @@ function setActingArm(p, facing, upper, lower, otherUpper = 8, otherLower = 12) 
 }
 
 // ---------- ambient / movement poses ----------
-function poseIdle(seed, now) {
+function poseIdle(seed, facing, now) {
   const p = basePose();
   const phase = ((now / seed.auraPulseMs) % 1) * Math.PI * 2;
   const breathe = Math.sin(phase);
+  const f = facing >= 0 ? 1 : -1;
   p.chestBob = breathe * 1.4;
   p.headBob = breathe * 0.6;
-  p.chestLean = seed.lean * 0.5 + breathe * 1.1;
-  p.waistLean = seed.lean * 0.6;
-  p.headTilt = seed.headTiltIdle + Math.sin(phase * 0.6 + 1.3) * 1.6;
-  p.armL.upper = 9 + seed.armCarry + Math.sin(phase) * 2.2;
-  p.armR.upper = 9 - seed.armCarry * 0.4 + Math.sin(phase + Math.PI) * 2.2;
+  p.chestLean = (seed.lean * 0.5 + breathe * 1.1) * f;
+  p.waistLean = seed.lean * 0.6 * f;
+  p.headTilt = (seed.headTiltIdle + Math.sin(phase * 0.6 + 1.3) * 1.6) * f;
+  // A loose ready stance, bladed toward the opponent instead of a
+  // symmetric hang — the lead arm (whichever side currently faces them)
+  // carried a touch higher and further forward than the rear arm, so
+  // facing reads clearly even at rest instead of looking the same no
+  // matter which way the fighter is turned. Angle values authored for
+  // facing-right (matching this file's convention elsewhere), mirrored by
+  // `f` the same way setActingArm mirrors an attack.
+  const lead = f >= 0 ? "armR" : "armL";
+  const rear = f >= 0 ? "armL" : "armR";
+  p[lead] = { upper: (24 + seed.armCarry + Math.sin(phase) * 2.2) * f, lower: 24 };
+  p[rear] = { upper: (10 - seed.armCarry * 0.4 + Math.sin(phase + Math.PI) * 2.2) * f, lower: 14 };
   p.stance = seed.stanceWidth;
   return p;
 }
@@ -429,7 +439,7 @@ const CAST_VARIANTS = { laser: poseLaserCast, arrow: poseArrowCast };
 
 
 function poseAttacking(attackPhase, facing, seed, now) {
-  if (!attackPhase) return poseIdle(seed, now);
+  if (!attackPhase) return poseIdle(seed, facing, now);
   const gen = MELEE_VARIANTS[attackPhase.variant] || CAST_VARIANTS[attackPhase.variant] || poseCast;
   const prog = phaseProgress(attackPhase);
   return gen(attackPhase.phase, prog, facing >= 0 ? 1 : -1);
@@ -539,7 +549,7 @@ export function computeSkeletonPose(ctx) {
       case "running": pose = poseGait(worldX, facing, seed, clamp(speed / 260, 1.05, 2.4)); break;
       case "walking": pose = poseGait(worldX, facing, seed, clamp(speed / 260, 0.5, 1.05)); break;
       case "idle":
-      default: pose = poseIdle(seed, now); break;
+      default: pose = poseIdle(seed, facing, now); break;
     }
   }
 
