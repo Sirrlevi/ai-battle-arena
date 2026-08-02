@@ -101,7 +101,7 @@ function useLandPulse(state, now) {
 
 export default function Stickman({ fighter, pose, auraFilterId, effectType = null, statusVisuals = [], isWinner = false }) {
   const { name, hp, maxHp = 100, energy, maxEnergy = 100, color, alive } = fighter;
-  const { x = 0, y = 0, facing = 1, state = "idle", attackPhase = null, flashing = false, hitMagnitude = 0, combo = 0, teleportAlpha = 1, hitStagger = 0 } = pose || {};
+  const { x = 0, y = 0, facing = 1, state = "idle", attackPhase = null, flashing = false, hitMagnitude = 0, combo = 0, teleportAlpha = 1, hitStagger = 0, frozen = false } = pose || {};
 
   const now = Date.now();
   const hpPct = Math.max(0, Math.min(1, hp / maxHp));
@@ -158,7 +158,25 @@ export default function Stickman({ fighter, pose, auraFilterId, effectType = nul
   const auraRy = 78 * aura.scale;
 
   return (
-    <g transform={`translate(${x}, ${y + skel.hop}) rotate(${rotation}) scale(${transformScale})`} opacity={opacity}>
+    <g transform={`translate(${x}, ${y + skel.hop}) rotate(${rotation}) scale(${transformScale})`} opacity={opacity} filter={frozen ? "url(#frozenDesaturate)" : undefined}>
+      {/* Speedster ghost trail — reuses the joint positions already computed
+          above for the main body (no separate pose computation), a
+          simplified spine+legs+head silhouette faded and offset behind the
+          character, opposite their facing. Only active while
+          motion.speedTrail is set (powerCatalog.js's `speedster: true`
+          powers, during the fast dash-in only — see animationController.js). */}
+      {pose?.speedTrail &&
+        [1, 2, 3].map((i) => (
+          <g key={`ghost-${i}`} transform={`translate(${-facing * i * 24}, 0)`} opacity={Math.max(0, 0.32 - i * 0.09)}>
+            <line x1={ankleL.x} y1={ankleL.y} x2={kneeL.x} y2={kneeL.y} stroke={auraColor} strokeWidth={5} strokeLinecap="round" />
+            <line x1={kneeL.x} y1={kneeL.y} x2={hipL.x} y2={hipL.y} stroke={auraColor} strokeWidth={5} strokeLinecap="round" />
+            <line x1={ankleR.x} y1={ankleR.y} x2={kneeR.x} y2={kneeR.y} stroke={auraColor} strokeWidth={5} strokeLinecap="round" />
+            <line x1={kneeR.x} y1={kneeR.y} x2={hipR.x} y2={hipR.y} stroke={auraColor} strokeWidth={5} strokeLinecap="round" />
+            <line x1={waist.x} y1={waist.y} x2={chest.x} y2={chest.y} stroke={auraColor} strokeWidth={6} strokeLinecap="round" />
+            <line x1={chest.x} y1={chest.y} x2={neck.x} y2={neck.y} stroke={auraColor} strokeWidth={5} strokeLinecap="round" />
+            <circle cx={head.x} cy={head.y} r={RIG.HEAD_R} fill={auraColor} />
+          </g>
+        ))}
       {/* Aura glow — spec section 6 (partial): shape/spike-count/pulse-speed
           from each fighter's own generated flavor text (personalitySeed),
           size from energy%, tint from hp% (both Phase 1 fields, already on

@@ -62,6 +62,7 @@ const TELEPORT_PARTICLES = {
   wind: { ring: "magic_circle", spark: "aura_trail", color: "#E8F5EC" },
   shadow: { ring: "magic_circle", spark: "energy", color: "#7B4FE0" },
   arcane: { ring: "magic_circle", spark: "energy", color: "#B98CFF" },
+  temporal: { ring: "galaxy", spark: "stars", color: "#B8CCFF" },
 };
 const TORSO_OFFSET_Y = -80; // where projectiles AIM at (the target's center of mass), relative to a fighter's feet
 // Where a ranged attack visually LAUNCHES FROM, relative to a fighter's
@@ -89,6 +90,9 @@ function projectileOrigin(anim, variant) {
 // DEFAULT_IMPACT_FRACTION in animationController.js), so the text and the
 // character's own flinch land at roughly the same moment.
 const LOG_SYNC_DELAY_MS = 260;
+const TIME_STOP_DURATION = 1.1; // seconds a "timeStop"-special power (powerCatalog.js) freezes its target for
+const TIME_SLOW_DURATION = 0.9; // seconds a "timeSlow"-special power runs the whole game loop at reduced speed
+const TIME_SLOW_FACTOR = 0.32; // how much dt is scaled by during a time-slow window — not a full freeze (that's hitstop's job), a real slow-motion playback
 let dmgNumberId = 1;
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
@@ -267,6 +271,11 @@ export default function App() {
   // frame and silently killed the whole requestAnimationFrame loop — the
   // root cause of movement/animation appearing to stop.
   const hitstopRef = useRef(0);
+  // Seconds remaining of a "timeSlow"-special power's slow-motion window
+  // (powerCatalog.js) — unlike hitstop (a full pause), this scales dt down
+  // for the whole tick rather than stopping it, a real slow-motion
+  // playback rather than a freeze-frame.
+  const timeSlowRef = useRef(0);
 
   // Phase 3.95: Animation Sync Engine
   const eventBusRef = useRef(createEventBus());
@@ -370,6 +379,14 @@ export default function App() {
         color: impact.power?.color,
         glowColor: impact.power?.glow,
       });
+      // "timeSlow"-special powers (powerCatalog.js) start their slow-motion
+      // window the moment the ability is cast, not when it lands — time
+      // visibly bending is the point, and it also means the projectile's
+      // own flight plays out in slow motion, which reads well together.
+      if (impact.power?.special === "timeSlow") {
+        timeSlowRef.current = TIME_SLOW_DURATION;
+        triggerCameraEvent(cameraRef.current, "impact-flash", { intensity: 0.3 });
+      }
       return;
     }
 
@@ -385,6 +402,17 @@ export default function App() {
       // element instead of the same generic flash for every punch/kick.
       if (impact.power) {
         emitParticles(particleSystemRef.current, impact.power.particle, targetAnim.motion.x, targetAnim.motion.y + TORSO_OFFSET_Y, { intensity: impact.power.tier === "massive" || impact.power.tier === "heavy" ? "high" : "medium", color: impact.power.color });
+      }
+      // "timeStop"-special powers (powerCatalog.js) freeze the DEFENDER —
+      // see the dt=0 handling in the tick loop below for how the freeze
+      // itself works. This just starts the timer and plays the "everything
+      // just stopped" beat: a snap-flash + a burst reading as a shattered/
+      // stopped clock.
+      if (impact.power?.special === "timeStop") {
+        targetAnim.timeFrozenTimer = TIME_STOP_DURATION;
+        triggerCameraEvent(cameraRef.current, "camera-snap");
+        emitParticles(particleSystemRef.current, "magic_circle", targetAnim.motion.x, targetAnim.motion.y + TORSO_OFFSET_Y, { intensity: "high", color: "#EAF6FF" });
+        emitParticles(particleSystemRef.current, "stars", targetAnim.motion.x, targetAnim.motion.y + TORSO_OFFSET_Y, { intensity: "high", color: "#EAF6FF" });
       }
     }
   }
@@ -420,11 +448,30 @@ export default function App() {
       return;
     }
 
+    // "timeSlow"-special powers (powerCatalog.js) run a real slow-motion
+    // window instead of a full pause — dt is scaled down for the rest of
+    // this tick (motion, particles, camera, every timer below all run off
+    // this same dt), decaying back to normal playback speed as the timer
+    // runs out. Deliberately after the hitstop check above: a full pause
+    // always wins if both happen to be active at once.
+    if (timeSlowRef.current > 0) {
+      timeSlowRef.current = Math.max(0, timeSlowRef.current - dt);
+      dt *= TIME_SLOW_FACTOR;
+    }
+
     const currentRoster = stateRef.current;
     const newFrameCues = [];
     for (const f of currentRoster) {
       const anim = animRef.current[f.key];
       if (!anim) continue;
+
+      // "timeStop"-special powers (powerCatalog.js) freeze a fighter for a
+      // duration — true freeze via dt=0 through the normal updateAnimation
+      // call below (motion doesn't move since velocity*0=0, every timer
+      // holds since nothing decrements by dt), not a special internal
+      // branch inside updateAnimation itself.
+      if (anim.timeFrozenTimer > 0) anim.timeFrozenTimer = Math.max(0, anim.timeFrozenTimer - dt);
+      const frozen = anim.timeFrozenTimer > 0;
 
       // Face the opponent whenever genuinely at rest — no active motion
       // command and not mid-attack (an attack manages its own facing via
@@ -436,7 +483,7 @@ export default function App() {
       // from each other at rest, and (since every attack pose in
       // characterAnimation.js mirrors off this same facing value) strikes
       // swinging in the wrong direction entirely.
-      if (f.alive && !anim.motion.command && !anim.attackPhase) {
+      if (!frozen && f.alive && !anim.motion.command && !anim.attackPhase) {
         const opponent = currentRoster.find((o) => o.key !== f.key);
         const opponentAnim = opponent ? animRef.current[opponent.key] : null;
         const opponentX = opponentAnim ? opponentAnim.motion.x : opponent?.position.x;
@@ -445,7 +492,7 @@ export default function App() {
         }
       }
 
-      const { impact, state } = updateAnimation(anim, dt, MOTION_BOUNDS, anim.homeX, f.alive);
+      const { impact, state } = updateAnimation(anim, frozen ? 0 : dt, MOTION_BOUNDS, anim.homeX, f.alive);
       anim.state = state;
       if (impact) handleImpact(anim, impact.targetKey, impact);
       // Phase 4D, spec section 17: the two cue types with no resolved turn
@@ -908,9 +955,9 @@ export default function App() {
           ? {
               x: anim.motion.x, y: anim.motion.y, facing: anim.motion.facing, state: anim.state, attackPhase: anim.attackPhase, flashing: anim.flashTimer > 0, hitMagnitude: anim.lastHitDamage || 0,
               vx: anim.motion.vx, vy: anim.motion.vy, grounded: anim.motion.grounded, mode: anim.motion.mode, justHitWall: anim.motion.justHitWall, combo: anim.comboCount || 0,
-              teleportAlpha: anim.motion.teleportAlpha, hitStagger: hitStaggerDegrees(anim),
+              teleportAlpha: anim.motion.teleportAlpha, hitStagger: hitStaggerDegrees(anim), speedTrail: anim.motion.speedTrail, frozen: anim.timeFrozenTimer > 0,
             }
-          : { x: f.position.x, y: f.position.y, facing: 1, state: "idle", attackPhase: null, flashing: false, hitMagnitude: 0, vx: 0, vy: 0, grounded: true, mode: "idle", justHitWall: false, combo: 0, teleportAlpha: 1, hitStagger: 0 },
+          : { x: f.position.x, y: f.position.y, facing: 1, state: "idle", attackPhase: null, flashing: false, hitMagnitude: 0, vx: 0, vy: 0, grounded: true, mode: "idle", justHitWall: false, combo: 0, teleportAlpha: 1, hitStagger: 0, speedTrail: false, frozen: false },
       ];
     })
   );

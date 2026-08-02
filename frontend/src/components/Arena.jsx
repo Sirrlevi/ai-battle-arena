@@ -44,6 +44,9 @@ export default function Arena({ fighters, poses = {}, activeEffects = {}, camera
           <filter id="cameraMotionBlur" x="-30%" y="-10%" width="160%" height="120%">
             <feGaussianBlur stdDeviation={`${motionBlurAmount} 0`} />
           </filter>
+          <filter id="frozenDesaturate" x="-20%" y="-20%" width="140%" height="140%">
+            <feColorMatrix type="saturate" values="0.12" />
+          </filter>
           <linearGradient id="groundFade" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#1a1e24" stopOpacity="0" />
             <stop offset="100%" stopColor="#1a1e24" stopOpacity="0.9" />

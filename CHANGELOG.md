@@ -444,6 +444,52 @@ the real physics-feel lever a data file can honestly drive (see above);
 I didn't relabel knockback distance as "ragdoll" to appear to cover more
 than this actually does.
 
+## 13. Speedster + time-stop / time-slow / time-travel (`movementController.js`, `animationController.js`, `powerCatalog.js`, `App.jsx`, `Stickman.jsx`, `Arena.jsx`)
+
+Four new mechanics, not just four new catalog colors — genuinely new
+behavior, matching the spec ("character jitni fast chahe move kar sakta
+hai... time stop, time manipulation... proper vfx ke saath").
+
+**Speedster.** `issueCommand` (`movementController.js`) now takes an
+optional speed override — previously every dash used the same fixed
+speed regardless of ability. Powers tagged `speedster: true` in the
+catalog (sonic dash, blitz combo, afterimage strike, flash step, and the
+new time-stop/temporal-slam entries) get `SPEEDSTER_DASH_SPEED` (1600,
+well above the fastest normal movement at 640) for their approach —
+genuinely faster, not just a different color, while still a finite,
+bounded number ("obviously kuch limits hongi" — not unlimited/instant).
+Paired with a ghost-trail: 3 fading offset copies of the character's
+*already-computed* joint positions (no separate pose computation needed —
+Stickman.jsx just re-draws the existing spine/legs/head points behind the
+main body), active only during the fast dash-in itself.
+
+**Time stop.** Two catalog entries (`time_stop`, `quantum_freeze`, both
+tier "massive"/"heavy") freeze the *defender* on impact — a genuine
+freeze, not a slow-down: the tick loop calls `updateAnimation` with
+`dt=0` for a frozen fighter, so motion doesn't move (velocity × 0) and
+every timer holds (nothing decrements by dt) via the exact same code path
+everything else already goes through, not a special internal branch.
+Paired with a desaturation filter (`feColorMatrix` saturate ≈0) on that
+fighter specifically, plus a snap-flash and a "shattered clock" particle
+burst at the moment it lands.
+
+**Time slow.** A real slow-motion window, distinct from the freeze above
+and from the existing hitstop (a full pause) — `time_slow` scales the
+whole tick's `dt` down (to ~32%) for just under a second, so motion,
+particles, and camera all genuinely play out slower rather than either
+stopping or continuing at normal speed. Starts the moment the ability is
+*cast*, not when it lands, so the projectile's own flight reads as
+part of the slow-motion rather than arriving at normal speed into it.
+
+**Time travel.** Routed through the existing teleport-flavor system
+(`resolveTeleportVariant` / `TELEPORT_PARTICLES` — see #5) rather than a
+new mechanic: "time travel / time warp / chrono / rewind" now resolves to
+a `temporal` teleport flavor with its own look (a galaxy-ring + starfield
+burst instead of the existing lightning/fire/ice/wind/shadow/arcane
+looks), reusing the exact vanish-instant snap-reappear sequence #5 already
+built rather than inventing a second teleport pipeline for what is, visually,
+the same "cut through spacetime and reappear" beat with a different flavor.
+
 ## Files touched across this session
 `frontend/src/App.jsx`, `frontend/src/lib/movementController.js`,
 `frontend/src/lib/actionInterpreter.js`, `frontend/src/lib/animationController.js`,

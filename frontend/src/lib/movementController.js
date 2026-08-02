@@ -65,6 +65,7 @@ export function createMotionState(x, y, groundY) {
     justVanished: false, // true for exactly the frame the fighter disappears at the origin (position already snapped to the destination this same frame)
     justArrived: false, // true for exactly the frame the reappear fade begins at the destination
     justTookOff: false, // true for exactly the frame a fly/hover command lifts off from standing on the ground
+    speedTrail: false, // true while a speedster-tagged power's dash is active — Stickman.jsx draws a ghost-image trail while this is set
   };
 }
 
@@ -73,8 +74,8 @@ export function createMotionState(x, y, groundY) {
  * For jump, targetX is optional (in-place hop); for the rest, targetX is
  * where the fighter is trying to get to.
  */
-export function issueCommand(motion, type, targetX, targetY) {
-  motion.command = { type, targetX: targetX ?? motion.x, targetY };
+export function issueCommand(motion, type, targetX, targetY, speedOverride) {
+  motion.command = { type, targetX: targetX ?? motion.x, targetY, speedOverride };
   if (type === "teleport") {
     // The vanish-phase VFX needs to play at where the fighter WAS, but by
     // the time it fires, motion.x has already snapped to the destination
@@ -137,7 +138,7 @@ export function updateMotion(motion, dt, bounds) {
     }
     motion.x += motion.vx * dt;
   } else if (cmd && (cmd.type === "walk" || cmd.type === "run" || cmd.type === "dash")) {
-    const speed = SPEEDS[cmd.type];
+    const speed = cmd.speedOverride || SPEEDS[cmd.type];
     const dx = cmd.targetX - motion.x;
     const dir = dx >= 0 ? 1 : -1;
     motion.facing = dir;

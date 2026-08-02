@@ -18,6 +18,11 @@ import { resolveAnimationState } from "./animationStateMachine.js";
 // for none of them — arm strikes in particular stopped ~35-40px short of
 // the target, which is what read as "punching the air."
 const MELEE_REACH = { punch: 56, slash: 56, uppercut: 56, kick: 72, roundhouse: 72 };
+// Speedster dash speed: well above SPEEDS.dash (640 in movementController.js,
+// the fastest normal approach) — "as fast as they want, obviously with
+// limits" per spec: dramatically faster than anything else in the game,
+// but still a finite, bounded number, not unlimited/instant.
+const SPEEDSTER_DASH_SPEED = 1600;
 const DEFAULT_MELEE_REACH = 56; // arm-based default, for categories (teleport/movement) that always land on an arm-style pose (poseCast/posePunch)
 // How far above GROUND_Y (340, per battleState.js) fly/hover get during a
 // movement-category attack. GROUND_Y leaves ~340px of headroom to the
@@ -70,6 +75,7 @@ export function createAnimState(x, y, groundY) {
     lastHitDamage: 0, // Phase 4A: cosmetic only — read by characterAnimation.js to scale hit-reaction pose (light flinch vs heavy stagger). Never read by any damage/combat logic.
     hitDir: 0, // which way (1 | -1) they were last knocked — cosmetic only, feeds hitStaggerDegrees below
     approachStyle: null, // "fly" | "hover" | null — set by queueAction's movement branch, read by the recovery-phase return trip below so a fighter who flew in also flies home instead of walking
+    timeFrozenTimer: 0, // seconds remaining frozen by a "timeStop"-special power (powerCatalog.js) — App.jsx's tick loop calls updateAnimation with dt=0 for this fighter while it's active, a true freeze rather than a special internal branch
     pendingDescend: null, // { targetX, targetY } | null — fly's second arc stage (swoop down to strike height), consumed by the "approach" phase check below once the first (soar up) command completes
     comboCount: 0, // Phase 4D, spec section 13: consecutive-turn hit streak for THIS fighter's own actions, cosmetic only (badge + minor pose flourish) — never read by any damage/combat logic.
     homeX: x,
@@ -117,6 +123,7 @@ const TELEPORT_KEYWORD_VARIANT = [
   { variant: "wind", words: ["wind", "gust", "gale", "air current"] },
   { variant: "shadow", words: ["shadow", "dark", "void", "umbral", "night"] },
   { variant: "ice", words: ["ice", "frost", "glacial", "crystal"] },
+  { variant: "temporal", words: ["time travel", "time warp", "through time", "chrono", "temporal", "rewind"] },
 ];
 
 function resolveTeleportVariant(entry) {
@@ -223,7 +230,17 @@ export function queueAction(anim, intent, opponentAnim, entry) {
   // melee (default)
   const dir = opponentAnim.motion.x >= anim.motion.x ? 1 : -1;
   const approachX = opponentAnim.motion.x - dir * reachFor(intent.variant);
-  issueCommand(anim.motion, "dash", approachX);
+  // Speedster-tagged powers (powerCatalog.js) get a real speed boost, not
+  // just a different trail color — SPEEDSTER_DASH_SPEED is well above the
+  // fastest normal movement (SPEEDS.dash in movementController.js), and
+  // motion.speedTrail (consumed in Stickman.jsx) is what draws the
+  // ghost-image trail behind them while it's active.
+  if (intent.power?.speedster) {
+    issueCommand(anim.motion, "dash", approachX, undefined, SPEEDSTER_DASH_SPEED);
+    anim.motion.speedTrail = true;
+  } else {
+    issueCommand(anim.motion, "dash", approachX);
+  }
   anim.attackPhase = { variant: intent.variant, phase: "approach", t: 0 };
   anim.pendingImpact = { targetKey: entry.defenderKey, damage: entry.damage, result: entry.result, power: intent.power };
 }
@@ -307,6 +324,7 @@ export function updateAnimation(anim, dt, bounds, homeReturnX, alive = true) {
         } else {
           ap.phase = "windup";
           ap.t = 0;
+          anim.motion.speedTrail = false; // the fast dash-in is done — trail only draws during that, not the strike itself
         }
       }
     } else {

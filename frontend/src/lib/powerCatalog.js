@@ -154,11 +154,23 @@ export const POWER_CATALOG = [
   { id: "crushing_grip", cat: "melee", meleeHint: "punch", color: "#D9B88A", particle: "debris", tier: "heavy", words: ["crushing grip", "bone crush", "vice grip"] },
 
   // ---- Speed / Time ----
-  { id: "sonic_dash", cat: "melee", meleeHint: "punch", color: "#8FE1FF", particle: "aura_trail", tier: "medium", words: ["sonic dash", "super speed strike", "blitz punch"] },
-  { id: "time_slow", cat: "projectile", shape: "energy", color: "#B8D4FF", glow: "#5C7AC9", particle: "reality_fragment", tier: "medium", words: ["time slow", "slow field", "time dilation"] },
-  { id: "blitz_combo", cat: "melee", meleeHint: "roundhouse", color: "#8FE1FF", particle: "aura_trail", tier: "heavy", words: ["blitz combo", "flurry of blows", "rapid strikes"] },
-  { id: "afterimage_strike", cat: "melee", meleeHint: "slash", color: "#A8E8FF", particle: "aura_trail", tier: "medium", words: ["afterimage strike", "afterimage", "phantom speed strike"] },
-  { id: "flash_step_hit", cat: "melee", meleeHint: "punch", color: "#CFF6FF", particle: "aura_trail", tier: "light", words: ["flash step", "instant step strike", "blink strike"] },
+  // `speedster: true` gets the fast-dash + afterimage-trail treatment (see
+  // App.jsx/animationController.js) on top of the normal melee pose —
+  // genuinely faster movement, not just a different particle color.
+  // `special` flags a power that needs its own dedicated mechanic beyond
+  // color/tier: "timeStop" briefly freezes and desaturates the opponent
+  // while the attacker keeps moving at normal speed (App.jsx), "timeSlow"
+  // scales the whole game loop's dt down for a brief real slow-motion
+  // window (not a full freeze — see triggerTimeSlow in App.jsx).
+  { id: "sonic_dash", cat: "melee", meleeHint: "punch", color: "#8FE1FF", particle: "aura_trail", tier: "medium", speedster: true, words: ["sonic dash", "super speed strike", "blitz punch"] },
+  { id: "time_slow", cat: "projectile", shape: "energy", color: "#B8D4FF", glow: "#5C7AC9", particle: "reality_fragment", tier: "medium", special: "timeSlow", words: ["time slow", "slow field", "time dilation"] },
+  { id: "blitz_combo", cat: "melee", meleeHint: "roundhouse", color: "#8FE1FF", particle: "aura_trail", tier: "heavy", speedster: true, words: ["blitz combo", "flurry of blows", "rapid strikes"] },
+  { id: "afterimage_strike", cat: "melee", meleeHint: "slash", color: "#A8E8FF", particle: "aura_trail", tier: "medium", speedster: true, words: ["afterimage strike", "afterimage", "phantom speed strike"] },
+  { id: "flash_step_hit", cat: "melee", meleeHint: "punch", color: "#CFF6FF", particle: "aura_trail", tier: "light", speedster: true, words: ["flash step", "instant step strike", "blink strike"] },
+  { id: "time_stop", cat: "melee", meleeHint: "uppercut", color: "#EAF6FF", particle: "reality_fragment", tier: "massive", special: "timeStop", speedster: true, words: ["time stop", "stop time", "frozen moment", "stopped clock"] },
+  { id: "quantum_freeze", cat: "melee", meleeHint: "punch", color: "#DCEEFF", particle: "reality_fragment", tier: "heavy", special: "timeStop", speedster: true, words: ["quantum freeze", "temporal freeze", "freeze time"] },
+  { id: "temporal_slam", cat: "melee", meleeHint: "punch", color: "#9CC8FF", particle: "aura_trail", tier: "heavy", speedster: true, words: ["temporal slam", "chrono strike", "time-warped punch"] },
+  { id: "chrono_pulse", cat: "projectile", shape: "energy", color: "#B8CCFF", glow: "#5C7AC9", particle: "galaxy", tier: "medium", words: ["chrono pulse", "time pulse", "temporal wave"] },
 
   // ---- Force / Telekinesis ----
   { id: "force_push", cat: "projectile", shape: "energy", color: "#D8D8FF", glow: "#8080C8", particle: "reality_fragment", tier: "medium", words: ["force push", "kinetic push", "force blast"] },
