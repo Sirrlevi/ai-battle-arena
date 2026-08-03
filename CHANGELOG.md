@@ -490,6 +490,44 @@ looks), reusing the exact vanish-instant snap-reappear sequence #5 already
 built rather than inventing a second teleport pipeline for what is, visually,
 the same "cut through spacetime and reappear" beat with a different flavor.
 
+## 14. Fight pause + frame-by-frame scrub (`App.jsx`)
+
+**Recording.** A new ring buffer (`frameHistoryRef`, ~10s / 600 frames at
+60fps) captures one lightweight snapshot per rendered frame during live
+play: both fighters' hp/energy/alive, every pose field Stickman.jsx
+actually renders (position, facing, state, attack phase, hit-flash,
+teleport fade, hit-stagger, speed-trail, frozen), every live projectile's
+position/variant/color, and the camera's x/zoom. This needed real care —
+`anim.motion`, `anim.attackPhase`, and projectile objects are all mutated
+in place every frame elsewhere in this file (not reassigned), so storing
+a snapshot meant explicitly copying out primitive values, never a
+reference to the live object — a naive `{...anim}`-style copy would have
+made every "historical" frame silently show today's latest state instead
+of its own.
+
+**Pausing** now defaults the scrub position to the most recently recorded
+frame (pausing shouldn't visually jump anywhere), and **resuming** drops
+back to live rendering rather than continuing from wherever was being
+reviewed — the underlying simulation was never affected by scrubbing,
+only what's displayed.
+
+**Scrubbing:** a panel appears under the arena while paused — a range
+slider across the whole buffer, ±1 and ±30 frame step buttons, and a
+"Live" button that jumps to the latest frame. Moving it substitutes the
+historical snapshot for live state in exactly the props Arena needs
+(fighters, poses, camera, projectiles) — Stickman.jsx and Projectile.jsx
+needed no changes at all, since from their point of view a scrubbed frame
+and a live one are the same shape of data.
+
+**Scope I deliberately left out:** particle replay (cleared during scrub
+rather than shown stale/misplaced — replaying exact particle physics
+would mean snapshotting every live particle's individual state every
+frame, real cost for a purely decorative layer) and status-visuals/
+active-effects (kept live — slower-changing, lower value to get exactly
+historically accurate). Both were conscious scope cuts to keep this
+addition contained and correct rather than trying to make everything
+perfectly scrubbable and risking bugs I can't visually verify here.
+
 ## Files touched across this session
 `frontend/src/App.jsx`, `frontend/src/lib/movementController.js`,
 `frontend/src/lib/actionInterpreter.js`, `frontend/src/lib/animationController.js`,

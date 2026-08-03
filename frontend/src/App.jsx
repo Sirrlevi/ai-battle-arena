@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Swords, Play, Pause, RotateCcw, AlertTriangle, Loader2 } from "lucide-react";
+import { Swords, Play, Pause, RotateCcw, AlertTriangle, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
 import { createSession, setSessionKeys, generateCharacter as apiGenerateCharacter, battleTurn as apiBattleTurn, waitForBackend, API_BASE, ApiError, getMemory, getAuthority, setAuthority as apiSetAuthority } from "./api.js";
 import { createFighter, resetFighterCombatState, computeSpawnPositions, ARENA_WIDTH, GROUND_Y } from "./lib/battleState.js";
 import { resolveAction, tickStatus } from "./lib/battleEngine.js";
@@ -93,6 +93,7 @@ const LOG_SYNC_DELAY_MS = 260;
 const TIME_STOP_DURATION = 1.1; // seconds a "timeStop"-special power (powerCatalog.js) freezes its target for
 const TIME_SLOW_DURATION = 0.9; // seconds a "timeSlow"-special power runs the whole game loop at reduced speed
 const TIME_SLOW_FACTOR = 0.32; // how much dt is scaled by during a time-slow window — not a full freeze (that's hitstop's job), a real slow-motion playback
+const FRAME_HISTORY_MAX = 600; // ~10s at 60fps — how far back the frame-scrub buffer (frameHistoryRef) reaches
 let dmgNumberId = 1;
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
@@ -248,6 +249,11 @@ export default function App() {
   const [wakeAttempt, setWakeAttempt] = useState(0);
   const [damageNumbers, setDamageNumbers] = useState([]);
   const [, setRenderTick] = useState(0); // forces a re-render every animation frame
+  // Frame-by-frame scrub: null = live rendering (normal), a number = showing
+  // frameHistoryRef.current[scrubIndex] instead — see the tick loop below
+  // for recording and the Arena props further down for how this substitutes
+  // for live state.
+  const [scrubIndex, setScrubIndex] = useState(null);
 
   // Phase 3.5: Reality Authority + debug panels
   const [authorityMode, setAuthorityModeState] = useState("engine");
@@ -284,6 +290,16 @@ export default function App() {
   const animDebugRef = useRef(null);
   const audioCuesRef = useRef([]); // Phase 4D, spec section 17: rolling log of fired sound-cue names (no audio assets — this is the event layer itself)
   const [animDebugOpen, setAnimDebugOpen] = useState(false);
+  // Frame-by-frame scrub history — much finer-grained than
+  // animationTimelineRef above (one entry per resolved TURN); this is one
+  // lightweight snapshot per rendered FRAME, capped to the last
+  // FRAME_HISTORY_SECONDS of real gameplay. Every field captured here is
+  // copied out as plain primitives (never a reference to anim.motion,
+  // anim.attackPhase, or a projectile object) because those are mutated in
+  // place every frame elsewhere in this file — storing a reference would
+  // make every historical snapshot silently show today's, i.e. the most
+  // recent, state instead of its own.
+  const frameHistoryRef = useRef([]);
 
   // Wake the backend (tolerating Render free-tier cold starts) and then
   // establish a session, as soon as the app loads.
@@ -581,6 +597,38 @@ export default function App() {
 
     updateCamera(cameraRef.current, currentRoster.map((f) => ({ alive: f.alive, motion: animRef.current[f.key]?.motion })), ARENA_WIDTH, dt);
     updateParticles(particleSystemRef.current, dt);
+
+    // Frame-by-frame scrub recording — every field here is a copied-out
+    // primitive, never a reference to anim.motion / anim.attackPhase / a
+    // projectile object (all mutated in place elsewhere in this file — a
+    // stored reference would make every historical snapshot silently show
+    // whatever the CURRENT state is, not its own moment in time).
+    frameHistoryRef.current.push({
+      fighters: currentRoster.map((f) => ({ key: f.key, hp: f.hp, energy: f.energy, alive: f.alive })),
+      poses: Object.fromEntries(
+        currentRoster.map((f) => {
+          const anim = animRef.current[f.key];
+          if (!anim) return [f.key, null];
+          return [
+            f.key,
+            {
+              x: anim.motion.x, y: anim.motion.y, facing: anim.motion.facing, state: anim.state,
+              attackPhase: anim.attackPhase ? { variant: anim.attackPhase.variant, phase: anim.attackPhase.phase } : null,
+              flashing: anim.flashTimer > 0, hitMagnitude: anim.lastHitDamage || 0,
+              teleportAlpha: anim.motion.teleportAlpha, hitStagger: hitStaggerDegrees(anim),
+              speedTrail: anim.motion.speedTrail, frozen: anim.timeFrozenTimer > 0, combo: anim.comboCount || 0,
+            },
+          ];
+        })
+      ),
+      projectiles: projectileManagerRef.current.items.map((p) => ({ id: p.id, variant: p.variant, x: p.x, y: p.y, fromX: p.fromX, fromY: p.fromY, toX: p.toX, toY: p.toY, duration: p.duration, elapsed: p.elapsed, color: p.color, glowColor: p.glowColor })),
+      camera: { x: cameraRef.current.x, zoom: cameraRef.current.zoom },
+      round,
+      t: performance.now(),
+    });
+    if (frameHistoryRef.current.length > FRAME_HISTORY_MAX + 30) {
+      frameHistoryRef.current = frameHistoryRef.current.slice(-FRAME_HISTORY_MAX);
+    }
 
     setRenderTick((t) => t + 1);
   }, true);
@@ -913,10 +961,27 @@ export default function App() {
   }
 
   function togglePause() {
-    if (phase === "battle") { runRef.current.pause = true; setPhase("paused"); }
-    else if (phase === "paused") { runRef.current.pause = false; setPhase("battle"); }
+    if (phase === "battle") {
+      runRef.current.pause = true;
+      setPhase("paused");
+      // Default to the latest recorded frame — pausing shouldn't visually
+      // jump anywhere; scrubbing backward from here is opt-in via the
+      // controls this unlocks (see the scrub panel further down).
+      setScrubIndex(Math.max(0, frameHistoryRef.current.length - 1));
+    } else if (phase === "paused") {
+      runRef.current.pause = false;
+      setPhase("battle");
+      setScrubIndex(null); // back to live — resuming continues the actual (live) simulation, not from wherever was being reviewed
+    }
   }
 
+  const scrubMax = Math.max(0, frameHistoryRef.current.length - 1);
+  function stepScrub(delta) {
+    setScrubIndex((i) => {
+      const base = i === null ? scrubMax : i;
+      return Math.min(scrubMax, Math.max(0, base + delta));
+    });
+  }
   function reset() {
     runRef.current.stop = true;
     setPhase("setup");
@@ -962,6 +1027,16 @@ export default function App() {
     })
   );
   const statusVisualsByFighter = Object.fromEntries(roster.map((f) => [f.key, activeStatusVisuals(f.status)]));
+  // Frame scrub: substitute the historical snapshot for live state when
+  // actively scrubbing. Falls back to every live value above whenever not
+  // scrubbing (scrubIndex null) or the index doesn't resolve (buffer
+  // empty/trimmed past it) — scrubbing can never leave the arena with
+  // nothing to render.
+  const scrubFrame = scrubIndex !== null ? frameHistoryRef.current[scrubIndex] : null;
+  const displayFighters = scrubFrame ? roster.map((f) => ({ ...f, ...(scrubFrame.fighters.find((sf) => sf.key === f.key) || {}) })) : roster;
+  const displayPoses = scrubFrame ? scrubFrame.poses : poses;
+  const displayCamera = scrubFrame ? { ...cameraRef.current, ...scrubFrame.camera } : cameraRef.current;
+  const displayProjectiles = scrubFrame ? scrubFrame.projectiles : projectileManagerRef.current.items;
   // Phase 4A: drives the new victory pose (spec section 14) — false for
   // every fighter until the battle actually ends, so it never affects a
   // battle in progress.
@@ -1094,17 +1169,53 @@ export default function App() {
 
             <div className="mb-4">
               <Arena
-                fighters={roster}
-                poses={poses}
+                fighters={displayFighters}
+                poses={displayPoses}
                 activeEffects={activeEffects}
-                camera={cameraRef.current}
-                projectiles={projectileManagerRef.current.items}
-                damageNumbers={damageNumbers}
-                particles={livingParticles(particleSystemRef.current)}
+                camera={displayCamera}
+                projectiles={displayProjectiles}
+                damageNumbers={scrubFrame ? [] : damageNumbers}
+                particles={scrubFrame ? [] : livingParticles(particleSystemRef.current)}
                 statusVisualsByFighter={statusVisualsByFighter}
                 isWinnerByFighter={isWinnerByFighter}
               />
             </div>
+
+            {phase === "paused" && (
+              <div className="mb-4 rounded-lg p-4" style={{ background: PANEL, border: `1px solid ${LINE}` }}>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium" style={{ color: INK }}>⏸ Frame Review</span>
+                  <span className="text-xs" style={{ color: DIM }}>
+                    {scrubFrame && frameHistoryRef.current[scrubMax] && scrubIndex !== scrubMax
+                      ? `${((frameHistoryRef.current[scrubMax].t - scrubFrame.t) / 1000).toFixed(1)}s ago`
+                      : "Live"}
+                    {scrubFrame ? ` · Round ${scrubFrame.round}` : ""}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={scrubMax}
+                  value={scrubIndex ?? scrubMax}
+                  onChange={(e) => setScrubIndex(Number(e.target.value))}
+                  className="w-full mb-3"
+                  style={{ accentColor: GOLD }}
+                />
+                <div className="flex items-center justify-center gap-2">
+                  <button onClick={() => stepScrub(-30)} className="px-3 py-1.5 rounded text-xs font-medium" style={{ background: "#1c2027", color: INK, border: `1px solid ${LINE}` }}>−30</button>
+                  <button onClick={() => stepScrub(-1)} className="p-1.5 rounded" style={{ background: "#1c2027", color: INK, border: `1px solid ${LINE}` }} title="Previous frame"><ChevronLeft size={16} /></button>
+                  <button
+                    onClick={() => setScrubIndex(scrubMax)}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded text-xs font-medium"
+                    style={{ background: scrubIndex === scrubMax ? GOLD : "#1c2027", color: scrubIndex === scrubMax ? "#000" : INK, border: `1px solid ${LINE}` }}
+                  >
+                    <Play size={12} /> Live
+                  </button>
+                  <button onClick={() => stepScrub(1)} className="p-1.5 rounded" style={{ background: "#1c2027", color: INK, border: `1px solid ${LINE}` }} title="Next frame"><ChevronRight size={16} /></button>
+                  <button onClick={() => stepScrub(30)} className="px-3 py-1.5 rounded text-xs font-medium" style={{ background: "#1c2027", color: INK, border: `1px solid ${LINE}` }}>+30</button>
+                </div>
+              </div>
+            )}
 
             <div className="grid md:grid-cols-2 gap-4 mb-4">
               {roster.map((f) => (
