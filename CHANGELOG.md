@@ -528,13 +528,63 @@ historically accurate). Both were conscious scope cuts to keep this
 addition contained and correct rather than trying to make everything
 perfectly scrubbable and risking bugs I can't visually verify here.
 
+## 15. Fight recording / export (new file: `fightRecorder.js`)
+
+**Read this section before the others if you only read one** — this
+feature is genuinely different in kind from everything else in this
+document, and I want to be direct about why rather than let it blend in
+with 14 other entries that were all static-analysis-verifiable rendering
+math.
+
+**On mp4 vs mkv, honestly:** no browser has an API that produces an
+`.mkv` file — Matroska isn't something any browser's `MediaRecorder`
+targets, at all. The only way to get a real `.mkv` (or a *guaranteed*-
+everywhere `.mp4`) client-side is transcoding with something like
+ffmpeg.wasm — a ~25-30MB WebAssembly dependency I have no way to install
+or test in this sandbox (no npm/network access here), and not something I
+was willing to wire in blind and call done. What this actually does:
+asks the browser for `.mp4` first (`MediaRecorder.isTypeSupported`) and
+only falls back to `.webm` where the browser genuinely can't produce mp4
+itself. Safari and recent Chrome/Edge give you real `.mp4` today; other
+browsers get `.webm` — a real, standard, fully playable video format
+(VLC, Discord, YouTube, and most video players all take it directly),
+just not literally the extension asked for on every browser. I'd rather
+tell you that plainly than have you find out after the fact.
+
+**What it does:** there's no direct "record this SVG" browser API, so
+`fightRecorder.js` serializes the live arena `<svg>` to a data URL every
+frame, draws it onto a hidden `<canvas>` (`XMLSerializer` → `Image` →
+`drawImage`), feeds that canvas into `canvas.captureStream(30)`, and
+records the result with `MediaRecorder`. A red "Record" button appears
+next to Pause once a battle starts; "Stop & Save" ends it, triggers a
+download (`battle-<fighter1>-vs-<fighter2>-<timestamp>.mp4/webm`), and
+leaves a persistent "Download again" link since auto-download can get
+blocked by browser settings. A reset mid-recording stops and discards
+rather than leaving a dangling recorder.
+
+**The honest limitation, stated plainly:** every other entry in this
+document was deterministic rendering/physics math I could trace through
+the actual code paths and be genuinely confident about without running
+it. This one leans on browser Media APIs — `MediaRecorder`,
+`captureStream`, SVG-as-`Image` loading — that have real, documented
+cross-browser quirks (Safari in particular has historically been pickier
+about exactly this kind of SVG rasterization) that are very hard to fully
+verify by reading code alone, and I have no browser available in this
+sandbox to actually run it in. I'm confident in the approach — it's a
+standard, well-established technique — but this is the one feature in the
+whole session where "please test this yourself before relying on it" is
+not just a formality. If it doesn't work cleanly in whatever browser you
+test in first, that's a real possibility, not a hedge — tell me what you
+see and I'll fix it from there.
+
 ## Files touched across this session
 `frontend/src/App.jsx`, `frontend/src/lib/movementController.js`,
 `frontend/src/lib/actionInterpreter.js`, `frontend/src/lib/animationController.js`,
 `frontend/src/lib/characterAnimation.js`, `frontend/src/lib/cameraController.js`,
 `frontend/src/lib/projectileManager.js`, `frontend/src/lib/powerCatalog.js` (new),
-`frontend/src/components/Stickman.jsx`, `frontend/src/components/Arena.jsx`,
-`frontend/src/components/Projectile.jsx`, `backend/src/lib/memory/promptBuilder.js`.
+`frontend/src/lib/fightRecorder.js` (new), `frontend/src/components/Stickman.jsx`,
+`frontend/src/components/Arena.jsx`, `frontend/src/components/Projectile.jsx`,
+`backend/src/lib/memory/promptBuilder.js`.
 
 No backend routes, deployment config, database, character/power/ability
 schema, or UI layout were touched.

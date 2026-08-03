@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect } from "react";
-import { Swords, Play, Pause, RotateCcw, AlertTriangle, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
+import { Swords, Play, Pause, RotateCcw, AlertTriangle, Loader2, ChevronLeft, ChevronRight, Circle, Square } from "lucide-react";
 import { createSession, setSessionKeys, generateCharacter as apiGenerateCharacter, battleTurn as apiBattleTurn, waitForBackend, API_BASE, ApiError, getMemory, getAuthority, setAuthority as apiSetAuthority } from "./api.js";
 import { createFighter, resetFighterCombatState, computeSpawnPositions, ARENA_WIDTH, GROUND_Y } from "./lib/battleState.js";
 import { resolveAction, tickStatus } from "./lib/battleEngine.js";
 import { interpretAction } from "./lib/actionInterpreter.js";
 import { createAnimState, queueAction, updateAnimation, applyHitReaction, triggerTransformation, registerTurnOutcome, hitStaggerDegrees } from "./lib/animationController.js";
 import { PHYSICS_TIERS } from "./lib/powerCatalog.js";
+import { createFightRecorder, downloadBlob, recordingFilename, extensionForMimeType } from "./lib/fightRecorder.js";
 import { createProjectileManager, spawnProjectile, spawnBeamClashPair, updateProjectiles } from "./lib/projectileManager.js";
 import { createCamera, updateCamera, triggerCameraEvent } from "./lib/cameraController.js";
 import { createEventBus, on, emit, buildAnimationEvents, buildDebugSnapshot, cameraEventFor, particleEventsFor } from "./lib/animationEventBus.js";
@@ -254,6 +255,17 @@ export default function App() {
   // for recording and the Arena props further down for how this substitutes
   // for live state.
   const [scrubIndex, setScrubIndex] = useState(null);
+  // Fight recording — arenaContainerRef wraps the Arena's rendered <svg> so
+  // fightRecorder.js can grab it without Arena.jsx needing to change at
+  // all (a plain DOM query on a ref, not a forwarded ref through the
+  // component). recordingRef holds the live recorder instance (start/stop/
+  // isRunning — see fightRecorder.js); recordingInfo is only ever the
+  // *last completed* recording, for the persistent download link.
+  const arenaContainerRef = useRef(null);
+  const recordingRef = useRef(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingInfo, setRecordingInfo] = useState(null); // { url, filename } | null
+  const [recordingError, setRecordingError] = useState("");
 
   // Phase 3.5: Reality Authority + debug panels
   const [authorityMode, setAuthorityModeState] = useState("engine");
@@ -982,6 +994,38 @@ export default function App() {
       return Math.min(scrubMax, Math.max(0, base + delta));
     });
   }
+
+  function startRecording() {
+    setRecordingError("");
+    const svgEl = arenaContainerRef.current?.querySelector("svg");
+    const rec = createFightRecorder(svgEl, { fps: 30 });
+    if (!rec) {
+      setRecordingError("Recording isn't supported in this browser — MediaRecorder or an svg-capable canvas isn't available.");
+      return;
+    }
+    recordingRef.current = rec;
+    rec.start();
+    setIsRecording(true);
+  }
+
+  async function stopRecording() {
+    const rec = recordingRef.current;
+    if (!rec) return;
+    setIsRecording(false);
+    const blob = await rec.stop();
+    recordingRef.current = null;
+    if (!blob || blob.size === 0) {
+      setRecordingError("Recording produced no data — nothing to save.");
+      return;
+    }
+    const filename = recordingFilename(roster[0]?.name, roster[1]?.name, extensionForMimeType(rec.mimeType));
+    downloadBlob(blob, filename);
+    setRecordingInfo((prev) => {
+      if (prev?.url) URL.revokeObjectURL(prev.url);
+      return { url: URL.createObjectURL(blob), filename };
+    });
+  }
+
   function reset() {
     runRef.current.stop = true;
     setPhase("setup");
@@ -990,6 +1034,15 @@ export default function App() {
     setWinnerKey(null);
     setLastEntry(null);
     setDamageNumbers([]);
+    setScrubIndex(null);
+    frameHistoryRef.current = [];
+    if (recordingRef.current) {
+      recordingRef.current.stop(); // discard — a reset mid-recording wasn't an explicit "save this" action
+      recordingRef.current = null;
+      setIsRecording(false);
+    }
+    if (recordingInfo?.url) URL.revokeObjectURL(recordingInfo.url);
+    setRecordingInfo(null);
     setRoster((prev) => {
       const positions = computeSpawnPositions(prev.length);
       const next = prev.map((f, i) => createFighter({ key: f.key, index: i, total: prev.length, provider: f.provider, model: f.model, apiKey: f.apiKey, customPrompt: f.customPrompt, position: positions[i] }));
@@ -1080,6 +1133,16 @@ export default function App() {
               </button>
             )}
             {phase !== "setup" && (
+              <button
+                onClick={isRecording ? stopRecording : startRecording}
+                className="flex items-center gap-2 px-4 py-2 rounded text-sm font-medium"
+                style={{ background: isRecording ? "#3a1418" : PANEL, color: isRecording ? "#FF6B6B" : INK, border: `1px solid ${isRecording ? "#FF6B6B" : LINE}` }}
+              >
+                {isRecording ? <Square size={13} fill="#FF6B6B" /> : <Circle size={13} fill="#FF6B6B" color="#FF6B6B" />}
+                {isRecording ? "Stop & Save" : "Record"}
+              </button>
+            )}
+            {phase !== "setup" && (
               <button onClick={toggleMemoryPanel} className="flex items-center gap-2 px-3 py-2 rounded text-sm font-medium" style={{ background: memoryPanelOpen ? "#1c2027" : PANEL, color: memoryPanelOpen ? GOLD : DIM, border: `1px solid ${memoryPanelOpen ? GOLD : LINE}` }}>
                 🧠 Memory
               </button>
@@ -1114,6 +1177,26 @@ export default function App() {
                 {backendOk === false && " If this is a Render free-tier service, it may just be waking up — reload in ~30s."}
               </div>
             </div>
+          </div>
+        )}
+
+        {recordingError && (
+          <div className="flex items-start gap-2 mb-4 px-3 py-2 rounded text-sm" style={{ background: "#2a1414", border: `1px solid ${HIT}`, color: "#ffb4ae" }}>
+            <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: "0.78rem" }}>{recordingError}</div>
+          </div>
+        )}
+        {isRecording && (
+          <div className="flex items-center gap-2 mb-4 px-3 py-2 rounded text-sm" style={{ background: "#2a1418", border: "1px solid #FF6B6B", color: "#FF6B6B" }}>
+            <Circle size={10} fill="#FF6B6B" className="animate-pulse" /> Recording the fight — hit "Stop & Save" when you're done.
+          </div>
+        )}
+        {recordingInfo && !isRecording && (
+          <div className="flex items-center justify-between gap-2 mb-4 px-3 py-2 rounded text-sm" style={{ background: PANEL, border: `1px solid ${LINE}`, color: DIM }}>
+            <span>Recording saved: <span style={{ color: INK }}>{recordingInfo.filename}</span> (should have downloaded automatically)</span>
+            <a href={recordingInfo.url} download={recordingInfo.filename} className="px-3 py-1 rounded text-xs font-medium shrink-0" style={{ background: GOLD, color: "#000" }}>
+              Download again
+            </a>
           </div>
         )}
 
@@ -1167,7 +1250,7 @@ export default function App() {
               ))}
             </div>
 
-            <div className="mb-4">
+            <div className="mb-4" ref={arenaContainerRef}>
               <Arena
                 fighters={displayFighters}
                 poses={displayPoses}
