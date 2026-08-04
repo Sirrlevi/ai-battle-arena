@@ -641,6 +641,54 @@ wanting next — nothing here touches audio (there isn't one yet), flagging
 that I saw it so it's not lost, not attempting it in the same pass as
 everything above.
 
+## 17. Faster pacing: pipelined AI fetch + a real stale-context bug fix (`App.jsx`)
+
+**What I can't change, said plainly:** how long the AI provider itself
+takes to respond to a single request isn't something a frontend change
+can fix — that's real network + model inference time. What I can change
+is everything happening *around* that wait, and there was real,
+removable dead time in there.
+
+**Found while looking at this:** `runLoop` is a long-lived async function
+started once when a battle begins and running for the whole fight — its
+`recentTurns` was reading straight from the `log` state variable through
+a closure that only ever saw `log` exactly as it was at that single
+starting moment (the intro messages, before any turn exists). Every
+subsequent `setLog` call produces a new value for *future* renders, which
+an already-running closure never sees. So `recentTurns` — the field
+that's supposed to give each AI the recent back-and-forth — has
+effectively been permanently empty this whole time, independent of
+anything else in this project. Fixed with `logRef`, a ref mirroring the
+log's content that's updated the instant each turn resolves (not
+whenever the deferred `setLog` from #16 catches the visible UI up) —
+`fetchDecision` now reads from that instead.
+
+**The actual pacing fix: pipelining.** Previously each turn strictly
+fetched-then-animated-then-waited-900ms before even starting the next
+fetch — meaning the full AI response time (often multiple seconds) plus
+a flat 900ms landed as visible dead time between every single exchange.
+Now, the moment a turn's outcome is known and its animation has been
+queued, the *next* turn's fetch starts immediately in the background
+(`pending`, guarded by which fighter it's actually for) — using
+`stateRef.current`, which is already fully up to date by that point, so
+there's nothing stale about starting early. By the time that next turn
+actually comes up, its decision has often already arrived, because the
+network wait happened *during* the current turn's windup/strike/recovery
+instead of *after* it. The flat pause between turns dropped from 900ms to
+150ms (`TURN_PACING_MS`) — now just a beat for the viewer, not something
+anything is waiting on, since the real wait is hidden behind animation
+time instead.
+
+**What determines the remaining pacing now:** mostly just how fast each
+AI actually responds and how long each attack's own animation runs
+(both entirely reasonable, visible things — not artificial padding).
+Combined with #16's continuous-exchange fix (fighters no longer resetting
+to a standoff after every attack), the fight should read as substantially
+more continuous — though I want to be direct that if a given AI provider
+itself is simply slow to respond, pipelining hides that time rather than
+eliminating it, and a very slow provider will still be the pacing
+bottleneck no matter how tight everything around it gets.
+
 ## Files touched across this session
 `frontend/src/App.jsx`, `frontend/src/lib/movementController.js`,
 `frontend/src/lib/actionInterpreter.js`, `frontend/src/lib/animationController.js`,

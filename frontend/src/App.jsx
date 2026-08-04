@@ -91,6 +91,14 @@ function projectileOrigin(anim, variant) {
 // DEFAULT_IMPACT_FRACTION in animationController.js), so the text and the
 // character's own flinch land at roughly the same moment.
 const LOG_SYNC_DELAY_MS = 260;
+// Replaces a flat 900ms pause between every turn. Kept short and purely
+// cosmetic (a beat for the viewer to register "that attack ended, a new
+// one is starting") rather than a wait for anything — the actual AI
+// fetch for the next turn is kicked off while THIS turn's animation is
+// still playing (see runLoop's `pending` pre-fetch), not during this
+// delay, so this number is no longer what determines how long the fight
+// pauses between exchanges.
+const TURN_PACING_MS = 150;
 const TIME_STOP_DURATION = 1.1; // seconds a "timeStop"-special power (powerCatalog.js) freezes its target for
 const TIME_SLOW_DURATION = 0.9; // seconds a "timeSlow"-special power runs the whole game loop at reduced speed
 const TIME_SLOW_FACTOR = 0.32; // how much dt is scaled by during a time-slow window — not a full freeze (that's hitstop's job), a real slow-motion playback
@@ -312,6 +320,18 @@ export default function App() {
   // make every historical snapshot silently show today's, i.e. the most
   // recent, state instead of its own.
   const frameHistoryRef = useRef([]);
+  // Mirrors `log`'s content, but as a ref instead of state — updated
+  // synchronously the instant each turn resolves. runLoop is a long-lived
+  // async function (started once from startBattle, runs for the whole
+  // fight) — a plain closure over the `log` state variable would freeze at
+  // whatever `log` was at that single moment (the intro messages, before
+  // any turns exist) for the entire battle, since React state updates
+  // produce new values for FUTURE renders, not for an already-captured
+  // closure. That's what recentTurns (below) reads from now instead of
+  // `log` directly, and it's also what makes it safe to pre-fetch the next
+  // turn's AI decision before the current turn's own (deferred) setLog
+  // call has caught the visible log up yet.
+  const logRef = useRef([]);
 
   // Wake the backend (tolerating Render free-tier cold starts) and then
   // establish a session, as soon as the app loads.
@@ -772,6 +792,7 @@ export default function App() {
     }
     setErrorMsg("");
     setLog([]);
+    logRef.current = [];
     setRound(1);
     setWinnerKey(null);
     setLastEntry(null);
@@ -827,6 +848,33 @@ export default function App() {
   async function runLoop() {
     let turn = 0; // index into stateRef.current
     let r = 1;
+    // Pre-fetched decision for whichever fighter's turn is coming up next —
+    // kicked off near the bottom of the loop body, while the turn that was
+    // JUST resolved is still animating, so the network/AI response time
+    // overlaps with that animation instead of stacking after it. `.forKey`
+    // guards against ever applying a pre-fetched decision to the wrong
+    // fighter (e.g. after a skip — see below, pending is only ever set for
+    // the fighter whose turn is actually coming up next).
+    let pending = null; // { forKey, promise } | null
+
+    // Never rejects — resolves to {ok:true, result} or {ok:false, error} —
+    // so awaiting it is always safe regardless of whether it was awaited
+    // fresh or picked up from `pending` after resolving in the background.
+    function fetchDecision(fighter, opponent, round) {
+      const recentTurns = logRef.current.filter((l) => !l.system).slice(-10);
+      return apiBattleTurn(
+        sessionId,
+        fighter.key,
+        round,
+        { name: fighter.name, hp: fighter.hp, energy: fighter.energy, status: fighter.status.map((s) => s.type), combatStyle: fighter.combatStyle, personality: fighter.personality, weapon: fighter.weapon, aura: fighter.aura },
+        { name: opponent.name, hp: opponent.hp, energy: opponent.energy, status: opponent.status.map((s) => s.type) },
+        recentTurns,
+        fighter.customPrompt
+      )
+        .then((result) => ({ ok: true, result }))
+        .catch((error) => ({ ok: false, error }));
+    }
+
     while (!runRef.current.stop) {
       while (runRef.current.pause && !runRef.current.stop) {
         await sleep(250);
@@ -844,38 +892,30 @@ export default function App() {
       // Their opponent's turns keep resolving normally, so this fighter can
       // still be hit and finished off — they just can't act back.
       if (attackerAnimState?.disabled) {
+        pending = null; // never pre-fetched for a disabled fighter in the first place (see the pre-fetch guard below) — this is just defensive
         turn = 1 - turn;
         if (turn === 0) { r += 1; setRound(r); }
-        await sleep(900);
+        await sleep(TURN_PACING_MS);
         continue;
       }
 
       setThinkingKey(attacker.key);
-      let action = null;
-      let reality = null;
-      let narration = null;
-      let verdict = null;
-      let turnFailure = null;
-      try {
-        const recentTurns = log.filter((l) => !l.system).slice(-10);
-        const result = await apiBattleTurn(
-          sessionId,
-          attacker.key,
-          r,
-          { name: attacker.name, hp: attacker.hp, energy: attacker.energy, status: attacker.status.map((s) => s.type), combatStyle: attacker.combatStyle, personality: attacker.personality, weapon: attacker.weapon, aura: attacker.aura },
-          { name: defender.name, hp: defender.hp, energy: defender.energy, status: defender.status.map((s) => s.type) },
-          recentTurns,
-          attacker.customPrompt
-        );
-        action = result.action;
-        reality = result.reality;
-        narration = result.narration;
-        verdict = result.verdict;
-      } catch (e) {
-        logError("runLoop:turn", { round: r, actor: attacker.name, message: e.message, envelope: e instanceof ApiError ? e.envelope : null });
-        turnFailure = classifyTurnFailure(e);
+      let outcome;
+      if (pending && pending.forKey === attacker.key) {
+        outcome = await pending.promise; // likely already resolved — this turn's fetch has been running in the background since the previous turn's animation started
+      } else {
+        outcome = await fetchDecision(attacker, defender, r); // no head start available (first turn, or right after a skip) — fetch fresh, same as before pipelining existed
       }
+      pending = null;
       setThinkingKey(null);
+
+      let action = null, reality = null, narration = null, verdict = null, turnFailure = null;
+      if (outcome.ok) {
+        ({ action, reality, narration, verdict } = outcome.result);
+      } else {
+        logError("runLoop:turn", { round: r, actor: attacker.name, message: outcome.error.message, envelope: outcome.error instanceof ApiError ? outcome.error.envelope : null });
+        turnFailure = classifyTurnFailure(outcome.error);
+      }
 
       // The AI didn't actually respond this turn — the engine must never
       // invent an attack to fill the gap. A transient failure just costs
@@ -894,7 +934,7 @@ export default function App() {
         }
         turn = 1 - turn;
         if (turn === 0) { r += 1; setRound(r); }
-        await sleep(900);
+        await sleep(TURN_PACING_MS);
         continue;
       }
 
@@ -927,6 +967,12 @@ export default function App() {
       emit(eventBusRef.current, "turn:resolved", { entry, animEvents });
 
       stateRef.current = st.map((f) => ({ ...f, status: [...f.status], cooldowns: { ...f.cooldowns } }));
+      // Immediate, not deferred — recentTurns (in fetchDecision above) and
+      // the pre-fetch kicked off below both need this turn's entry right
+      // away, not whenever the visible log (setLog, in the setTimeout
+      // below) catches up. See logRef's own doc comment for why a plain
+      // `log` read doesn't work here at all.
+      logRef.current = [...logRef.current, entry];
       lastRealityRef.current = reality;
 
       // If the debug panels are open, keep them in sync with what just happened.
@@ -969,7 +1015,24 @@ export default function App() {
 
       turn = 1 - turn;
       if (turn === 0) { r += 1; setRound(r); }
-      await sleep(900);
+
+      // Start fetching the NEXT turn's decision now, while the animation
+      // just queued above is still playing out (windup + strike + recovery
+      // — several hundred ms at minimum) — by the time it's actually
+      // needed, at the top of the next iteration, it's very likely already
+      // resolved. stateRef.current was just reassigned above, so the
+      // upcoming attacker/defender's hp/energy/status read here is already
+      // final — nothing stale about starting this early. Skipped for a
+      // dead or already-disabled upcoming fighter, whose turn will just
+      // skip immediately anyway (see the top of the loop).
+      const nextAttacker = stateRef.current[turn];
+      const nextDefender = stateRef.current[1 - turn];
+      const nextAttackerAnimState = animRef.current[nextAttacker.key];
+      if (nextAttacker.alive && !nextAttackerAnimState?.disabled) {
+        pending = { forKey: nextAttacker.key, promise: fetchDecision(nextAttacker, nextDefender, r) };
+      }
+
+      await sleep(TURN_PACING_MS);
     }
   }
 
@@ -1031,6 +1094,7 @@ export default function App() {
     runRef.current.stop = true;
     setPhase("setup");
     setLog([]);
+    logRef.current = [];
     setRound(1);
     setWinnerKey(null);
     setLastEntry(null);
