@@ -577,6 +577,70 @@ not just a formality. If it doesn't work cleanly in whatever browser you
 test in first, that's a real possibility, not a hedge — tell me what you
 see and I'll fix it from there.
 
+## 16. Post-review fixes: idle hand mirroring, damage-before-hit, and continuous exchanges (`characterAnimation.js`, `App.jsx`, `animationController.js`)
+
+Three real bugs from watching an actual fight play out — two were mine
+to own directly, one was a bigger mechanical gap underneath the earlier
+fixes.
+
+**The idle-stance hand mirroring — my mistake, repeated.** #11's
+`poseIdle` rewrite mirrored `upper` by facing but left `lower` as a fixed
+value on both the lead and rear arm. Since the hand's actual position
+comes from `upper + lower` together (this file's own convention,
+documented in #9's `setActingArm` fix), only mirroring half of that sum
+meant the right-side fighter's hands landed in a different place than a
+true mirror of the left-side fighter's — exactly what you saw, and
+exactly the same mistake #9 already fixed once in `setActingArm`/
+`poseKick`/`poseRoundhouse`, just reintroduced here. Fixed the same way:
+`lower` now gets `* f` too. Audited every other `lower:` assignment in
+the file afterward specifically looking for this pattern again — nothing
+else had it.
+
+**Damage landing before the hit — a real gap #9 didn't cover.** #9 fixed
+the *log text* timing; it explicitly did not touch `setRoster` (what the
+hp bars actually render from) or the win-condition UI, both of which
+were still updating in the same instant `resolveAction` returned — before
+the attacker had even started their approach. That's what made damage
+(and, on a finishing blow, the "you win" screen) appear to land before
+the hit did. `stateRef.current` — the internal ref the *next* turn's
+decision-making reads — still updates immediately, since that has to stay
+accurate regardless of animation timing; only the visible `setRoster`
+call, the log, and `setWinnerKey`/`setPhase("finished")` now wait for the
+same synced moment #9 already established.
+
+**Continuous exchanges — the actual mechanical cause of the stop-start
+rhythm.** Every attack ended by walking (or flying) all the way back to
+the fighter's *original spawn position* — meaning after every single
+exchange, both fighters reset to a standoff at opposite ends of the arena
+before the next attack could even begin its approach. That's the literal
+mechanism behind "hit, retreat, opponent crosses the whole arena, hit,
+retreat" — not a pacing issue to tune, a specific line of code
+(`issueCommand(..., homeReturnX)`) doing exactly that every time. Removed
+it: a grounded fighter now simply settles into idle wherever the
+exchange left them — already at striking range, the way real exchanges
+actually stay in the pocket instead of resetting to neutral every
+turn. (A fly/hover attacker still comes back down to the ground
+afterward — otherwise they'd stay stuck hovering at strike altitude
+forever, and the landing VFX from #8 would never fire again — but
+straight down at their current position, not a flight back to spawn.)
+Knockback still pushes a real hit's target back a natural amount, so
+spacing still varies turn to turn — this only removed the artificial
+full-arena reset, not all repositioning.
+
+**What this doesn't change:** which ability an AI picks each turn is
+backend/prompt behavior, not animation — #4 already pushes toward
+varied, resource-aware choices ("prefer creativity over repetition," see
+`promptBuilder.js`), and the continuous-exchange fix above should make
+whatever the AI does pick read as much more connected regardless. If
+turn variety itself is still too repetitive after this, that's a
+separate, prompt-focused pass — happy to take it on specifically rather
+than bundle a guess at it into this animation fix.
+
+**Noted, not started:** the audio/real-time-sync system you mentioned
+wanting next — nothing here touches audio (there isn't one yet), flagging
+that I saw it so it's not lost, not attempting it in the same pass as
+everything above.
+
 ## Files touched across this session
 `frontend/src/App.jsx`, `frontend/src/lib/movementController.js`,
 `frontend/src/lib/actionInterpreter.js`, `frontend/src/lib/animationController.js`,

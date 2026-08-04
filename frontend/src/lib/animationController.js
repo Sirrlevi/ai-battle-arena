@@ -362,13 +362,25 @@ export function updateAnimation(anim, dt, bounds, homeReturnX, alive = true) {
             impact = anim.pendingImpact;
             anim.pendingImpact = null;
           }
-          // Return to spawn position after the exchange — the same way
-          // they arrived, so a fighter who flew in also flies home instead
-          // of dropping to a ground-walk mid-air.
+          // Previously returned all the way to spawn position here after
+          // every single attack — which is what forced a full re-approach
+          // (and the resulting stop-start "hit, retreat to opposite
+          // corners, opponent crosses the whole arena, hit, retreat"
+          // rhythm) before the next exchange could even start. A grounded
+          // fighter now just settles into idle wherever this attack left
+          // them — already at striking range of the opponent, same as a
+          // real fight staying "in the pocket" between exchanges instead
+          // of resetting to a standoff every turn. Knockback already
+          // pushes the defender back a natural amount on a real hit, so
+          // spacing still varies — this only removes the artificial
+          // full-arena retreat, not all repositioning. A fly/hover
+          // attacker still needs to come back down (that's what triggers
+          // the landing VFX and returns them to normal grounded idle —
+          // without this they'd stay stuck hovering at strike altitude
+          // forever) — but straight down at their current position, not a
+          // flight back to spawn.
           if (anim.approachStyle === "fly" || anim.approachStyle === "hover") {
-            issueCommand(anim.motion, anim.approachStyle, homeReturnX ?? anim.homeX, anim.motion.groundY);
-          } else {
-            issueCommand(anim.motion, "walk", homeReturnX ?? anim.homeX);
+            issueCommand(anim.motion, anim.approachStyle, anim.motion.x, anim.motion.groundY);
           }
           anim.approachStyle = null;
         } else {

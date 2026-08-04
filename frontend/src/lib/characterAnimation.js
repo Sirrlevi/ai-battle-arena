@@ -150,8 +150,8 @@ function poseIdle(seed, facing, now) {
   // `f` the same way setActingArm mirrors an attack.
   const lead = f >= 0 ? "armR" : "armL";
   const rear = f >= 0 ? "armL" : "armR";
-  p[lead] = { upper: (24 + seed.armCarry + Math.sin(phase) * 2.2) * f, lower: 24 };
-  p[rear] = { upper: (10 - seed.armCarry * 0.4 + Math.sin(phase + Math.PI) * 2.2) * f, lower: 14 };
+  p[lead] = { upper: (24 + seed.armCarry + Math.sin(phase) * 2.2) * f, lower: 24 * f };
+  p[rear] = { upper: (10 - seed.armCarry * 0.4 + Math.sin(phase + Math.PI) * 2.2) * f, lower: 14 * f };
   p.stance = seed.stanceWidth;
   return p;
 }

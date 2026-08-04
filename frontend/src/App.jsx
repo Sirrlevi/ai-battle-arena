@@ -927,7 +927,6 @@ export default function App() {
       emit(eventBusRef.current, "turn:resolved", { entry, animEvents });
 
       stateRef.current = st.map((f) => ({ ...f, status: [...f.status], cooldowns: { ...f.cooldowns } }));
-      setRoster(stateRef.current);
       lastRealityRef.current = reality;
 
       // If the debug panels are open, keep them in sync with what just happened.
@@ -945,26 +944,28 @@ export default function App() {
         registerTurnOutcome(attackerAnim, entry.result === "hit" || entry.result === "lethal");
       }
 
-      // The log text (damage dealt, hit/miss, etc.) previously appeared the
-      // instant the turn was computed — well before the attacker had even
-      // started moving. Deferred here to land close to when the strike
-      // actually connects instead: LOG_SYNC_DELAY_MS tracks the same
-      // windup + (strike * impact fraction) timing handleImpact's own hit
-      // registration uses (see MELEE_IMPACT_FRACTION / DEFAULT_IMPACT_FRACTION
-      // in animationController.js) — text and the character's own visual
-      // reaction now land at roughly the same moment. The animation itself
-      // (queueAction, just above) is NOT delayed — only this display update.
+      // Nothing VISIBLE (hp bars, log text, the winner banner) updates
+      // until the hit actually lands. stateRef.current already updated
+      // immediately above — the next turn's decision-making needs the
+      // real, current hp/energy right away — but setRoster, which is what
+      // the hp bars actually render from, was firing in that same instant
+      // too. That's what made damage (and, worse, the "you win" transition
+      // on a finishing blow) appear to land before the attacker had even
+      // reached the target — the exact bug being fixed here. LOG_SYNC_DELAY_MS
+      // (see its own comment above) is what times this to the actual hit.
+      const defenderDied = !defender.alive;
+      if (defenderDied) runRef.current.stop = true; // stop the loop for real, immediately — no further turns attempted regardless of when the UI below catches up
       setTimeout(() => {
+        setRoster(stateRef.current);
         setLog((prev) => [...prev, entry, ...(narration ? [{ system: true, text: `📣 ${narration}` }] : [])]);
         setLastEntry(entry);
+        if (defenderDied) {
+          setWinnerKey(attacker.key);
+          setPhase("finished");
+        }
       }, LOG_SYNC_DELAY_MS);
 
-      if (!defender.alive) {
-        setWinnerKey(attacker.key);
-        setPhase("finished");
-        runRef.current.stop = true;
-        break;
-      }
+      if (defenderDied) break;
 
       turn = 1 - turn;
       if (turn === 0) { r += 1; setRound(r); }
