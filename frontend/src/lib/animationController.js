@@ -61,6 +61,13 @@ const FLASH_DURATION = 0.18;
 const BLOCK_DURATION = 0.6;
 const KNOCKBACK_SPEED = 260;
 const TRANSFORM_PAUSE_DURATION = 0.9; // spec section 7: "pause combat briefly"
+// Knockdown sequence phase durations — fixed rather than tier-scaled, to
+// keep this reasonably simple; the KNOCKBACK DISTANCE (which does scale
+// with tier — see IMPACT_TIERS in App.jsx) already carries most of the
+// visual differentiation between a 20-damage knockdown and an 80-damage one.
+const KNOCKDOWN_FALL_DURATION = 0.32; // toppling-over animation length
+const KNOCKDOWN_DOWN_DURATION = 0.7; // lying on the ground before getting up starts
+const KNOCKDOWN_GETUP_DURATION = 0.55; // slow rise back to standing
 
 export function createAnimState(x, y, groundY) {
   return {
@@ -76,6 +83,17 @@ export function createAnimState(x, y, groundY) {
     hitDir: 0, // which way (1 | -1) they were last knocked — cosmetic only, feeds hitStaggerDegrees below
     approachStyle: null, // "fly" | "hover" | null — set by queueAction's movement branch, read by the recovery-phase return trip below so a fighter who flew in also flies home instead of walking
     timeFrozenTimer: 0, // seconds remaining frozen by a "timeStop"-special power (powerCatalog.js) — App.jsx's tick loop calls updateAnimation with dt=0 for this fighter while it's active, a true freeze rather than a special internal branch
+    // Damage-tiered knockdown sequence (spec: heavy hits should send a
+    // fighter down, not just stagger). null = not in a knockdown sequence;
+    // otherwise one of "falling" | "down" | "gettingUp" | "defensive".
+    // knockdownTimer counts down within whichever phase is active; the
+    // sequence is driven entirely by updateAnimation below, and — unlike
+    // every other state here — is checked FIRST by animationStateMachine
+    // (see its own comment) since it's an explicit, App.jsx-triggered
+    // sequence rather than something derived from motion/attack state.
+    knockdownPhase: null,
+    knockdownTimer: 0,
+    knockdownWallSlam: false, // one-shot, recomputed fresh every frame in updateAnimation — true for exactly the frame a "falling" knockdown carries into the arena wall
     pendingDescend: null, // { targetX, targetY } | null — fly's second arc stage (swoop down to strike height), consumed by the "approach" phase check below once the first (soar up) command completes
     comboCount: 0, // Phase 4D, spec section 13: consecutive-turn hit streak for THIS fighter's own actions, cosmetic only (badge + minor pose flourish) — never read by any damage/combat logic.
     homeX: x,
@@ -142,6 +160,13 @@ function resolveTeleportVariant(entry) {
  * (read for positioning, never mutated here).
  */
 export function queueAction(anim, intent, opponentAnim, entry) {
+  // Whatever this fighter is about to do — attack, defend, cast — it's
+  // their actual turn now, which always supersedes a still-playing
+  // knockdown recovery (triggerKnockdown/its phase advancement in
+  // updateAnimation, above). The turn engine is never blocked waiting for
+  // that sequence to finish; this is what makes that safe.
+  anim.knockdownPhase = null;
+
   if (intent.category === "block") {
     anim.blockTimer = BLOCK_DURATION;
     return;
@@ -263,6 +288,32 @@ export function applyHitReaction(anim, fromX, damage = 0, knockbackMultiplier = 
 }
 
 /**
+ * Heavier alternative to applyHitReaction, for a damage tier that should
+ * send the fighter down (App.jsx's IMPACT_TIERS decides which) instead of
+ * just a brief flinch-and-slide. Still applies real knockback velocity
+ * (same KNOCKBACK_SPEED base, same friction/wall-bounds physics every
+ * other motion already goes through — this doesn't add a new physics
+ * system, just a much bigger multiplier and a longer animation sequence
+ * layered on top) — the fighter genuinely flies back and can carry into
+ * the arena wall, then lies down, then slowly gets back up into a held
+ * defensive stance (animationStateMachine checks knockdownPhase before
+ * anything else, so this pre-empts the normal hit/idle states until it
+ * clears). Clears automatically the moment this fighter becomes an
+ * attacker again (see the top of queueAction) — the turn engine is never
+ * blocked waiting for this to finish playing out.
+ */
+export function triggerKnockdown(anim, fromX, damage, knockbackMultiplier) {
+  anim.hitTimer = HIT_REACT_DURATION;
+  anim.flashTimer = FLASH_DURATION;
+  anim.lastHitDamage = damage;
+  const dir = anim.motion.x >= fromX ? 1 : -1;
+  anim.hitDir = dir;
+  anim.motion.vx = dir * KNOCKBACK_SPEED * knockbackMultiplier;
+  anim.knockdownPhase = "falling";
+  anim.knockdownTimer = KNOCKDOWN_FALL_DURATION;
+}
+
+/**
  * Degrees to rotate the whole character this frame, on top of its normal
  * pose — a quick stagger in the knockback direction that eases back to
  * upright as anim.hitTimer runs out. 0 once the hit-react window ends.
@@ -307,6 +358,35 @@ export function updateAnimation(anim, dt, bounds, homeReturnX, alive = true) {
   if (anim.hitTimer > 0) anim.hitTimer = Math.max(0, anim.hitTimer - dt);
   if (anim.flashTimer > 0) anim.flashTimer = Math.max(0, anim.flashTimer - dt);
   if (anim.transformTimer > 0) anim.transformTimer = Math.max(0, anim.transformTimer - dt);
+
+  // Knockdown sequence (triggerKnockdown, above) — advances independently
+  // of the attackPhase machinery below, driven by its own timer/phase
+  // rather than motion/attack state. A wall hit during "falling"
+  // (motion.justHitWall, already current — updateMotion ran above) cuts
+  // the fall short into "down" immediately instead of waiting out the
+  // full fall duration: hitting a wall should visibly stop the tumble,
+  // not let it float through. knockdownWallSlam is a one-shot flag,
+  // recomputed fresh every frame, for App.jsx to fire the extra
+  // wall-impact VFX on exactly the frame it happens.
+  anim.knockdownWallSlam = false;
+  if (anim.knockdownPhase) {
+    anim.knockdownTimer = Math.max(0, anim.knockdownTimer - dt);
+    if (anim.knockdownPhase === "falling" && anim.motion.justHitWall) {
+      anim.knockdownWallSlam = true;
+      anim.knockdownTimer = 0;
+    }
+    if (anim.knockdownTimer <= 0) {
+      if (anim.knockdownPhase === "falling") {
+        anim.knockdownPhase = "down";
+        anim.knockdownTimer = KNOCKDOWN_DOWN_DURATION;
+      } else if (anim.knockdownPhase === "down") {
+        anim.knockdownPhase = "gettingUp";
+        anim.knockdownTimer = KNOCKDOWN_GETUP_DURATION;
+      } else if (anim.knockdownPhase === "gettingUp") {
+        anim.knockdownPhase = "defensive"; // held here — only queueAction (this fighter's own next turn) clears it, not a timer
+      }
+    }
+  }
 
   let impact = null;
 
@@ -394,6 +474,7 @@ export function updateAnimation(anim, dt, bounds, homeReturnX, alive = true) {
     alive,
     hitTimer: anim.hitTimer,
     transformTimer: anim.transformTimer,
+    knockdownPhase: anim.knockdownPhase,
     attackPhase: anim.attackPhase?.phase === "approach" ? null : anim.attackPhase,
     blocking: anim.blockTimer > 0,
     mode: anim.motion.mode,

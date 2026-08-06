@@ -284,6 +284,19 @@ function phaseProgress(attackPhase) {
   return clamp((attackPhase.t ?? 0) / dur, 0, 1);
 }
 
+// Mirrors animationController.js's KNOCKDOWN_FALL_DURATION /
+// KNOCKDOWN_GETUP_DURATION, same "duplicate for smooth pose easing only"
+// pattern phaseProgress above already uses for attack phases.
+// knockdownTimer there counts DOWN (unlike attackPhase.t, which counts up)
+// so progress is derived as 1 - remaining/duration instead.
+const KNOCKDOWN_FALL_DURATION = 0.32;
+const KNOCKDOWN_GETUP_DURATION = 0.55;
+
+function knockdownProgress(phase, timer) {
+  const dur = phase === "falling" ? KNOCKDOWN_FALL_DURATION : phase === "gettingUp" ? KNOCKDOWN_GETUP_DURATION : 1;
+  return clamp(1 - (timer ?? 0) / dur, 0, 1);
+}
+
 function posePunch(phase, prog, f) {
   const p = basePose();
   let u, l, waist, chest;
@@ -511,6 +524,86 @@ function poseVictory(seed, now) {
   return p;
 }
 
+// ---------- knockdown sequence (falling -> down -> gettingUp -> defensive) ----------
+// The lying-down look for "down" (and the toppling look for "falling")
+// comes mostly from the whole-body ROOT rotation Stickman.jsx applies —
+// the same trick poseDead already uses to read as "on the ground" without
+// needing separate lying-flat joint math. These poses only need to add
+// the limb detail on top of that rotation, the same relationship poseDead
+// has to its own rotation.
+
+function poseKnockdownFall(seed, progress) {
+  // Tumbling — limbs flail as the root rotation (Stickman.jsx) carries
+  // them from upright toward flat.
+  const p = basePose();
+  const flail = Math.sin(progress * Math.PI * 3.4) * 16 * (1 - progress * 0.4);
+  p.armL.upper = 55 + flail;
+  p.armR.upper = -55 - flail;
+  p.armL.lower = 36;
+  p.armR.lower = 36;
+  p.legL.upper = (-16 - flail * 0.5) * seed.limpBias;
+  p.legR.upper = (10 + flail * 0.5) * seed.limpBias;
+  p.legL.lower = 26;
+  p.legR.lower = 22;
+  p.headTilt = flail * 0.7;
+  p.chestLean = 12;
+  return p;
+}
+
+function poseKnockdownDown(seed, now) {
+  // At rest on the ground — dazed, not dead: unlike poseDead this still
+  // breathes.
+  const p = basePose();
+  const s = seed.limpBias;
+  const breathe = Math.sin(now / 420) * 0.7;
+  p.armL.upper = 42 + seed.armCarry * 0.5;
+  p.armR.upper = 38 - seed.armCarry * 0.5;
+  p.armL.lower = 28;
+  p.armR.lower = 24;
+  p.legL.upper = 9 * s;
+  p.legR.upper = -6 * s;
+  p.legL.lower = 22;
+  p.legR.lower = 18;
+  p.headTilt = 20 * s;
+  p.chestLean = 6 * s;
+  p.chestBob = breathe;
+  return p;
+}
+
+function poseKnockdownGetup(seed, prog) {
+  // Slow, effortful rise — crouched low at prog=0 (just off the ground),
+  // straightened by prog=1 into roughly a defensive-ready height.
+  const p = basePose();
+  p.crouch = mix(0.55, 0.18, prog);
+  p.armL.upper = mix(50, 30, prog);
+  p.armR.upper = mix(-50, -26, prog);
+  p.armL.lower = mix(20, 26, prog);
+  p.armR.lower = mix(20, 22, prog);
+  p.chestLean = mix(16, -4, prog);
+  p.headTilt = mix(14, 2, prog);
+  p.waistLean = mix(9, -2, prog);
+  return p;
+}
+
+function poseDefensive(seed, facing, now) {
+  // A held guard stance — distinct from poseBlocking's tucked-in, fully
+  // symmetric cover (a brief reaction) by properly mirroring toward the
+  // opponent (this is held for a while, watching them, not just weathering
+  // one hit) and reading a little looser/readier than a tight block.
+  const p = basePose();
+  const f = facing >= 0 ? 1 : -1;
+  const breathe = Math.sin(now / 480) * 1.6;
+  const lead = f >= 0 ? "armR" : "armL";
+  const rear = f >= 0 ? "armL" : "armR";
+  p[lead] = { upper: (40 + breathe) * f, lower: 34 * f };
+  p[rear] = { upper: (34 - breathe * 0.6) * f, lower: 30 * f };
+  p.chestLean = -6 * f;
+  p.waistLean = -4 * f;
+  p.crouch = 0.22;
+  p.stance = seed.stanceWidth * 1.05;
+  return p;
+}
+
 // ---------- top-level dispatch ----------
 /**
  * ctx: {
@@ -520,6 +613,7 @@ function poseVictory(seed, now) {
  *   facing,             // 1 | -1
  *   alive,
  *   hitMagnitude,       // last hit's entry.damage, 0 if none — optional, cosmetic only
+ *   knockdownTimer,     // anim.knockdownTimer — only read for "falling"/"gettingUp" states, to ease the pose over that phase
  *   isWinner,           // optional
  *   now,                // Date.now() at render time, for continuous ambient motion
  *   worldX,              // pose.x — gait phase is locked to distance traveled, not a timer
@@ -528,7 +622,7 @@ function poseVictory(seed, now) {
  * }
  */
 export function computeSkeletonPose(ctx) {
-  const { fighter, state, attackPhase, facing = 1, alive = true, hitMagnitude = 0, isWinner = false, now = 0, worldX = 0, speed = 0, landPulse = 0 } = ctx;
+  const { fighter, state, attackPhase, facing = 1, alive = true, hitMagnitude = 0, knockdownTimer = 0, isWinner = false, now = 0, worldX = 0, speed = 0, landPulse = 0 } = ctx;
   const seed = personalitySeed(fighter);
 
   let pose;
@@ -539,6 +633,10 @@ export function computeSkeletonPose(ctx) {
   } else {
     switch (state) {
       case "transforming": pose = poseTransforming(seed, now); break;
+      case "knockdownFalling": pose = poseKnockdownFall(seed, knockdownProgress("falling", knockdownTimer)); break;
+      case "knockdownDown": pose = poseKnockdownDown(seed, now); break;
+      case "knockdownGettingUp": pose = poseKnockdownGetup(seed, knockdownProgress("gettingUp", knockdownTimer)); break;
+      case "defensive": pose = poseDefensive(seed, facing, now); break;
       case "hit": pose = poseHit(seed, hitMagnitude, facing, now); break;
       case "attacking": pose = poseAttacking(attackPhase, facing, seed, now); break;
       case "blocking": pose = poseBlocking(seed); break;

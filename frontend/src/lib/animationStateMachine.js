@@ -8,6 +8,10 @@
 export const STATES = [
   "dead",
   "transforming",
+  "knockdownFalling",
+  "knockdownDown",
+  "knockdownGettingUp",
+  "defensive",
   "hit",
   "attacking",
   "blocking",
@@ -23,6 +27,10 @@ export const STATES = [
 const RULES = [
   { name: "dead", test: (ctx) => !ctx.alive },
   { name: "transforming", test: (ctx) => ctx.transformTimer > 0 },
+  { name: "knockdownFalling", test: (ctx) => ctx.knockdownPhase === "falling" },
+  { name: "knockdownDown", test: (ctx) => ctx.knockdownPhase === "down" },
+  { name: "knockdownGettingUp", test: (ctx) => ctx.knockdownPhase === "gettingUp" },
+  { name: "defensive", test: (ctx) => ctx.knockdownPhase === "defensive" },
   { name: "hit", test: (ctx) => ctx.hitTimer > 0 },
   { name: "attacking", test: (ctx) => !!ctx.attackPhase },
   { name: "blocking", test: (ctx) => ctx.blocking },

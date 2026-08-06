@@ -101,7 +101,7 @@ function useLandPulse(state, now) {
 
 export default function Stickman({ fighter, pose, auraFilterId, effectType = null, statusVisuals = [], isWinner = false }) {
   const { name, hp, maxHp = 100, energy, maxEnergy = 100, color, alive } = fighter;
-  const { x = 0, y = 0, facing = 1, state = "idle", attackPhase = null, flashing = false, hitMagnitude = 0, combo = 0, teleportAlpha = 1, hitStagger = 0, frozen = false } = pose || {};
+  const { x = 0, y = 0, facing = 1, state = "idle", attackPhase = null, flashing = false, hitMagnitude = 0, combo = 0, teleportAlpha = 1, hitStagger = 0, frozen = false, knockdownTimer = 0 } = pose || {};
 
   const now = Date.now();
   const hpPct = Math.max(0, Math.min(1, hp / maxHp));
@@ -112,7 +112,7 @@ export default function Stickman({ fighter, pose, auraFilterId, effectType = nul
 
   const speed = useSpeed(x, now);
   const landPulse = useLandPulse(state, now);
-  const targetPose = computeSkeletonPose({ fighter, state, attackPhase, facing, alive, hitMagnitude, isWinner, now, worldX: x, speed, landPulse });
+  const targetPose = computeSkeletonPose({ fighter, state, attackPhase, facing, alive, hitMagnitude, knockdownTimer, isWinner, now, worldX: x, speed, landPulse });
   // Strikes and hit-reactions blend fast (near-instant) so impact stays
   // crisp; ordinary movement blends slower for smoothness.
   const blendRate = attackPhase?.phase === "strike" ? 0.7 : state === "hit" ? 0.55 : 0.24;
@@ -121,7 +121,25 @@ export default function Stickman({ fighter, pose, auraFilterId, effectType = nul
   const seed = personalitySeed(fighter);
   const aura = computeAuraStyle(fighter, seed);
 
-  const rotation = alive ? hitStagger : 90;
+  // Knockdown rotation — same "rotate the whole root group" trick poseDead
+  // already uses for "on the ground" (90deg fixed), just animated: eases
+  // toward ~82deg over the fall, holds there while down, eases back to 0
+  // while getting up. Mirrors animationController.js's knockdown durations
+  // locally (same reasoning as characterAnimation.js's own
+  // KNOCKDOWN_FALL_DURATION/KNOCKDOWN_GETUP_DURATION comment) since this is
+  // pose EASING, not game state.
+  const DOWN_ANGLE = 82;
+  let knockdownRotation = null;
+  if (state === "knockdownFalling") {
+    const t = Math.max(0, Math.min(1, 1 - knockdownTimer / 0.32));
+    knockdownRotation = DOWN_ANGLE * t;
+  } else if (state === "knockdownDown") {
+    knockdownRotation = DOWN_ANGLE;
+  } else if (state === "knockdownGettingUp") {
+    const t = Math.max(0, Math.min(1, 1 - knockdownTimer / 0.55));
+    knockdownRotation = DOWN_ANGLE * (1 - t);
+  }
+  const rotation = !alive ? 90 : knockdownRotation !== null ? knockdownRotation : hitStagger;
   const opacity = (alive ? 1 : 0.4) * teleportAlpha;
   const transformScale = transforming ? 1.08 : 1;
   const hipY = RIG.HIP_Y + skel.crouch * 14;

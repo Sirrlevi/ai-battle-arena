@@ -15,6 +15,14 @@ const CATEGORY_KEYWORDS = [
   { category: "projectile", variant: "energy", words: ["energy blast", "energy bolt", "blast", "bolt", "orb of energy"] },
   { category: "projectile", variant: "arrow", words: ["arrow", "shoot", "shot"] },
   { category: "projectile", variant: "orb", words: ["orb", "sphere", "void ball"] },
+  // Explicit range language, independent of any specific element/shape —
+  // catches an ability that's clearly long-range by description but
+  // doesn't name a specific element the categories above would match
+  // (e.g. the 100-power catalog, checked before this list — see
+  // interpretAction below). Without this, an ambiguous long-range
+  // description could fall all the way through to the melee/punch
+  // default, which forces an approach a ranged attack shouldn't need.
+  { category: "projectile", variant: "energy", words: ["from a distance", "from afar", "long range", "long-range", "at range", "across the arena", "without closing the distance", "ranged attack"] },
   { category: "movement", variant: "dash", words: ["dash", "rush", "close the distance"] },
   { category: "movement", variant: "jump", words: ["jump", "leap", "hop"] },
   { category: "movement", variant: "fly", words: ["fly", "soar", "flight", "airborne"] },
@@ -24,7 +32,7 @@ const CATEGORY_KEYWORDS = [
   { category: "melee", variant: "roundhouse", words: ["roundhouse", "spin kick", "spinning kick", "spinning heel"] },
   { category: "melee", variant: "uppercut", words: ["uppercut", "upper cut", "rising fist"] },
   { category: "melee", variant: "slash", words: ["slash", "sword", "blade", "claw", "cut"] },
-  { category: "melee", variant: "punch", words: ["punch", "fist", "strike", "jab", "hit", "smash"] },
+  { category: "melee", variant: "punch", words: ["punch", "fist", "strike", "jab", "hit", "smash", "close range", "close-range", "up close", "melee range", "hand-to-hand", "hand to hand"] },
 ];
 
 /**

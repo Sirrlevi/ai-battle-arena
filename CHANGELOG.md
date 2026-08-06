@@ -689,14 +689,64 @@ itself is simply slow to respond, pipelining hides that time rather than
 eliminating it, and a very slow provider will still be the pacing
 bottleneck no matter how tight everything around it gets.
 
+## 18. Damage-tiered knockdown system + short/long-range clarity (`App.jsx`, `animationController.js`, `animationStateMachine.js`, `characterAnimation.js`, `Stickman.jsx`, `cameraController.js`, `actionInterpreter.js`, `promptBuilder.js`)
+
+**Eight damage brackets** (the exact ones from the spec: <5, 5-10, 10-20,
+20-30, 30-40, 40-60, 60-80, 80+), each escalating knockback distance and
+camera shake — below 20 damage the existing brief flinch-and-slide
+(`applyHitReaction`, unchanged in behavior) just gets progressively more
+knockback and, at 10+, a shake; 20 damage and up switches to an actual
+knockdown (new: `triggerKnockdown`) instead. This multiplies with (doesn't
+replace) #12's power-catalog tiers — a "massive"-tier ability and a raw
+80-damage number both push the same knockback number harder, together.
+
+**The knockdown sequence itself** is four new states
+(`knockdownFalling` → `knockdownDown` → `knockdownGettingUp` →
+`defensive`), checked by `animationStateMachine` before everything except
+actually being dead. The lying-down look reuses the same whole-body root-
+rotation trick `poseDead` already used for "on the ground" (this renderer
+has no separate lying-flat joint math to write — animating that existing
+rotation from 0° to ~82° and back is what "falling" and "getting up"
+actually are, visually) — so the new pose functions only needed to add
+limb detail on top of rotation that already existed, not invent a second
+death-adjacent pose system. A wall hit during "falling"
+(`motion.justHitWall` — which, worth flagging, had *never* had any visual
+consequence anywhere in this project before now, only a debug-panel
+readout) cuts the fall short into "down" immediately and fires its own
+extra impact (bigger shake, debris/dust at the wall, an extra flash) —
+the "or hits the wall boundary" half of the spec.
+
+**"Gets up slowly, holds a defensive stance until their own next move":**
+exactly that — `defensive` has no timer, it just holds, and is only ever
+cleared by `queueAction` (the moment this fighter is handed a real turn
+of their own, attack or defend). The turn engine is never blocked
+waiting for the sequence to finish playing — if their turn comes up mid-
+knockdown, it's simply interrupted, same principle as everything else in
+this project that touches turn timing.
+
+**Short-range vs. long-range** — audited first, since I suspected it
+already mostly worked: it did. `queueAction`'s "projectile" branch has
+never included an approach step (windup starts immediately, wherever the
+caster already is); "melee" has always dashed in first. What I actually
+changed is narrowing where an *ambiguous* description could still fall
+through to the melee default and force an unwanted approach: added
+explicit range-language catch-alls ("from a distance," "long range," "up
+close," "hand-to-hand," etc.) to `actionInterpreter.js`, and — since this
+is a rendering-side guess from whatever text the AI wrote, not something
+that can be perfectly inferred after the fact — added one clear sentence
+to the system prompt (`promptBuilder.js`) telling each AI the same
+short-range/long-range distinction the renderer already enforces, so its
+own wording naturally lands on the right side of it more often instead
+of leaving it to be guessed.
+
 ## Files touched across this session
 `frontend/src/App.jsx`, `frontend/src/lib/movementController.js`,
 `frontend/src/lib/actionInterpreter.js`, `frontend/src/lib/animationController.js`,
-`frontend/src/lib/characterAnimation.js`, `frontend/src/lib/cameraController.js`,
-`frontend/src/lib/projectileManager.js`, `frontend/src/lib/powerCatalog.js` (new),
-`frontend/src/lib/fightRecorder.js` (new), `frontend/src/components/Stickman.jsx`,
-`frontend/src/components/Arena.jsx`, `frontend/src/components/Projectile.jsx`,
-`backend/src/lib/memory/promptBuilder.js`.
+`frontend/src/lib/animationStateMachine.js`, `frontend/src/lib/characterAnimation.js`,
+`frontend/src/lib/cameraController.js`, `frontend/src/lib/projectileManager.js`,
+`frontend/src/lib/powerCatalog.js` (new), `frontend/src/lib/fightRecorder.js` (new),
+`frontend/src/components/Stickman.jsx`, `frontend/src/components/Arena.jsx`,
+`frontend/src/components/Projectile.jsx`, `backend/src/lib/memory/promptBuilder.js`.
 
 No backend routes, deployment config, database, character/power/ability
 schema, or UI layout were touched.

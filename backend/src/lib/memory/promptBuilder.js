@@ -47,6 +47,9 @@ export function buildTurnSystemPrompt({ fighterName, combatStyle, personality, w
     `Stay true to this personality for the entire battle — it must not drift turn to turn. ` +
     `${AUTHORITY_CLAUSE[authorityMode] || AUTHORITY_CLAUSE.engine}${profileClause} ` +
     `Every ability should imply a cost or a weakness and should not be reused every single turn — prefer creativity over repetition. ` +
+    `Every ability is either short-range (melee — punches, kicks, blades, grapples: your fighter physically closes the distance to land it) ` +
+    `or long-range (a projectile, beam, or blast — laser, arrow, energy bolt, thrown attack: usable from right where you are, no need to close in). ` +
+    `Make which one an ability is clear from its name or description. ` +
     `${statsClause}` +
     `Do not declare an ability you cannot afford or that is on cooldown; pick something you can actually do this turn. ` +
     `Current goal: ${goal}.${strategyHint ? ` Strategic notes: ${strategyHint}` : ""} ` +

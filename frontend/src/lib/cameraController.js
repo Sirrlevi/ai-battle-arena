@@ -72,7 +72,7 @@ export function triggerCameraEvent(camera, kind, opts = {}) {
         camera.punchInIntensity = pull;
         camera.punchInDir = dir >= 0 ? 1 : -1;
       }
-      camera.punchInZoom = Math.max(camera.punchInZoom, opts.intensity ?? 0.05);
+      camera.punchInZoom = Math.max(camera.punchInZoom, Math.min(0.3, opts.intensity ?? 0.05));
       break;
     }
     default:

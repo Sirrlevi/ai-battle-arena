@@ -4,7 +4,7 @@ import { createSession, setSessionKeys, generateCharacter as apiGenerateCharacte
 import { createFighter, resetFighterCombatState, computeSpawnPositions, ARENA_WIDTH, GROUND_Y } from "./lib/battleState.js";
 import { resolveAction, tickStatus } from "./lib/battleEngine.js";
 import { interpretAction } from "./lib/actionInterpreter.js";
-import { createAnimState, queueAction, updateAnimation, applyHitReaction, triggerTransformation, registerTurnOutcome, hitStaggerDegrees } from "./lib/animationController.js";
+import { createAnimState, queueAction, updateAnimation, applyHitReaction, triggerKnockdown, triggerTransformation, registerTurnOutcome, hitStaggerDegrees } from "./lib/animationController.js";
 import { PHYSICS_TIERS } from "./lib/powerCatalog.js";
 import { createFightRecorder, downloadBlob, recordingFilename, extensionForMimeType } from "./lib/fightRecorder.js";
 import { createProjectileManager, spawnProjectile, spawnBeamClashPair, updateProjectiles } from "./lib/projectileManager.js";
@@ -100,6 +100,28 @@ const LOG_SYNC_DELAY_MS = 260;
 // pauses between exchanges.
 const TURN_PACING_MS = 150;
 const TIME_STOP_DURATION = 1.1; // seconds a "timeStop"-special power (powerCatalog.js) freezes its target for
+// Damage-tiered hit reaction. Independent of (and multiplies with)
+// PHYSICS_TIERS from powerCatalog.js — that's about an ABILITY's inherent
+// weight (a boulder smash should hit harder than a dart at the same
+// number), this is about the raw damage NUMBER scaling the reaction, in
+// discrete brackets rather than one continuous curve, per spec: below 5
+// stays exactly as before (see applyHitReaction/hitStaggerDegrees, both
+// unchanged), each bracket above adds more knockback/camera, and 20+ starts
+// an actual knockdown (triggerKnockdown) instead of the brief flinch-and-
+// slide (applyHitReaction) every tier below it still uses.
+const IMPACT_TIERS = [
+  { max: 5, mult: 0.45, camera: null, falls: false },
+  { max: 10, mult: 0.75, camera: null, falls: false },
+  { max: 20, mult: 1.05, camera: "small-shake", falls: false },
+  { max: 30, mult: 1.5, camera: "medium-shake", falls: true },
+  { max: 40, mult: 1.9, camera: "medium-shake", falls: true },
+  { max: 60, mult: 2.4, camera: "large-shake", falls: true },
+  { max: 80, mult: 2.9, camera: "large-shake", falls: true },
+  { max: Infinity, mult: 3.4, camera: "large-shake", falls: true },
+];
+function impactTierFor(damage) {
+  return IMPACT_TIERS.find((t) => damage < t.max) || IMPACT_TIERS[IMPACT_TIERS.length - 1];
+}
 const TIME_SLOW_DURATION = 0.9; // seconds a "timeSlow"-special power runs the whole game loop at reduced speed
 const TIME_SLOW_FACTOR = 0.32; // how much dt is scaled by during a time-slow window — not a full freeze (that's hitstop's job), a real slow-motion playback
 const FRAME_HISTORY_MAX = 600; // ~10s at 60fps — how far back the frame-scrub buffer (frameHistoryRef) reaches
@@ -439,11 +461,18 @@ export default function App() {
     }
 
     if (impact.result === "hit" || impact.result === "lethal") {
-      const tier = PHYSICS_TIERS[impact.power?.tier] || PHYSICS_TIERS.medium;
-      applyHitReaction(targetAnim, actorAnim.motion.x, impact.damage, tier.knockback);
+      const powerTier = PHYSICS_TIERS[impact.power?.tier] || PHYSICS_TIERS.medium;
+      const dmgTier = impactTierFor(impact.damage);
+      const combinedKnockback = dmgTier.mult * powerTier.knockback;
+      if (dmgTier.falls) {
+        triggerKnockdown(targetAnim, actorAnim.motion.x, impact.damage, combinedKnockback);
+      } else {
+        applyHitReaction(targetAnim, actorAnim.motion.x, impact.damage, combinedKnockback);
+      }
+      if (dmgTier.camera) triggerCameraEvent(cameraRef.current, dmgTier.camera);
       triggerHitstop(impact.damage, impact.result === "lethal");
       pushDamageNumber(targetAnim.motion.x, targetAnim.motion.y + TORSO_OFFSET_Y, impact.damage, HIT);
-      triggerImpactFrame(targetAnim.motion.x, impact.damage, impact.result === "lethal", tier.impact);
+      triggerImpactFrame(targetAnim.motion.x, impact.damage, impact.result === "lethal", powerTier.impact);
       // Melee hits never had a colored particle burst before — every
       // catalog-matched power now gets one at the point of contact (torso
       // height, matching the damage-number spawn point), tinted by its
@@ -576,6 +605,19 @@ export default function App() {
         triggerCameraEvent(cameraRef.current, "small-shake");
         triggerCameraEvent(cameraRef.current, "motion-blur", { intensity: 0.5 });
       }
+      // A knockdown that carries into the arena wall (anim.knockdownWallSlam
+      // — see updateAnimation) gets its own extra impact on top of whatever
+      // the original hit already triggered: bigger shake, a debris/dust
+      // burst at the wall, an extra flash — the "or hits the wall boundary"
+      // half of the knockdown spec, distinct from just running out of
+      // knockback distance and settling normally.
+      if (anim.knockdownWallSlam) {
+        emitParticles(particleSystemRef.current, "debris", anim.motion.x, anim.motion.y + TORSO_OFFSET_Y, { intensity: "high" });
+        emitParticles(particleSystemRef.current, "dust", anim.motion.x, anim.motion.y, { intensity: "high" });
+        triggerCameraEvent(cameraRef.current, "large-shake");
+        triggerCameraEvent(cameraRef.current, "impact-flash", { intensity: 0.5 });
+        triggerCameraEvent(cameraRef.current, "motion-blur", { intensity: 0.4 });
+      }
       // A light continuous trail for the whole traversal, not just the two
       // endpoints — probabilistic emission (~14/s) instead of a new
       // per-fighter accumulator field, since this is purely decorative and
@@ -613,11 +655,18 @@ export default function App() {
         if (p.payload?.result === "hit" || p.payload?.result === "lethal") {
           const targetAnim = animRef.current[p.targetKey];
           if (targetAnim) {
-            const tier = PHYSICS_TIERS[p.payload.power?.tier] || PHYSICS_TIERS.medium;
-            applyHitReaction(targetAnim, p.fromX, p.payload.damage, tier.knockback);
+            const powerTier = PHYSICS_TIERS[p.payload.power?.tier] || PHYSICS_TIERS.medium;
+            const dmgTier = impactTierFor(p.payload.damage);
+            const combinedKnockback = dmgTier.mult * powerTier.knockback;
+            if (dmgTier.falls) {
+              triggerKnockdown(targetAnim, p.fromX, p.payload.damage, combinedKnockback);
+            } else {
+              applyHitReaction(targetAnim, p.fromX, p.payload.damage, combinedKnockback);
+            }
+            if (dmgTier.camera) triggerCameraEvent(cameraRef.current, dmgTier.camera);
             triggerHitstop(p.payload.damage, p.payload.result === "lethal");
             pushDamageNumber(p.toX, p.toY, p.payload.damage, HIT);
-            triggerImpactFrame(p.toX, p.payload.damage, p.payload.result === "lethal", tier.impact);
+            triggerImpactFrame(p.toX, p.payload.damage, p.payload.result === "lethal", powerTier.impact);
           }
         }
       },
@@ -1138,9 +1187,9 @@ export default function App() {
           ? {
               x: anim.motion.x, y: anim.motion.y, facing: anim.motion.facing, state: anim.state, attackPhase: anim.attackPhase, flashing: anim.flashTimer > 0, hitMagnitude: anim.lastHitDamage || 0,
               vx: anim.motion.vx, vy: anim.motion.vy, grounded: anim.motion.grounded, mode: anim.motion.mode, justHitWall: anim.motion.justHitWall, combo: anim.comboCount || 0,
-              teleportAlpha: anim.motion.teleportAlpha, hitStagger: hitStaggerDegrees(anim), speedTrail: anim.motion.speedTrail, frozen: anim.timeFrozenTimer > 0,
+              teleportAlpha: anim.motion.teleportAlpha, hitStagger: hitStaggerDegrees(anim), speedTrail: anim.motion.speedTrail, frozen: anim.timeFrozenTimer > 0, knockdownTimer: anim.knockdownTimer || 0,
             }
-          : { x: f.position.x, y: f.position.y, facing: 1, state: "idle", attackPhase: null, flashing: false, hitMagnitude: 0, vx: 0, vy: 0, grounded: true, mode: "idle", justHitWall: false, combo: 0, teleportAlpha: 1, hitStagger: 0, speedTrail: false, frozen: false },
+          : { x: f.position.x, y: f.position.y, facing: 1, state: "idle", attackPhase: null, flashing: false, hitMagnitude: 0, vx: 0, vy: 0, grounded: true, mode: "idle", justHitWall: false, combo: 0, teleportAlpha: 1, hitStagger: 0, speedTrail: false, frozen: false, knockdownTimer: 0 },
       ];
     })
   );
