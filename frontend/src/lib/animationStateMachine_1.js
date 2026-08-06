@@ -1,6 +1,27 @@
 
-// ---------- ANIMATION STATE MACHINE MODULE - M1 PATCHED ----------
-export const STATES = ["dead","transforming","knockdownFalling","knockdownDown","knockdownGettingUp","sliding","defensive","hit","attacking","blocking","jumping","falling","flying","hovering","running","walking","idle",];
+// ---------- ANIMATION STATE MACHINE MODULE - M1 REWRITE ----------
+// Priority-ordered rules with new states for physics
+
+export const STATES = [
+  "dead",
+  "transforming",
+  "knockdownFalling",
+  "knockdownDown",
+  "knockdownGettingUp",
+  "sliding", // M1 new: down opponent slide (Bug4)
+  "defensive",
+  "hit",
+  "attacking",
+  "blocking",
+  "jumping",
+  "falling",
+  "flying",
+  "hovering",
+  "running",
+  "walking",
+  "idle",
+];
+
 const RULES = [
   { name: "dead", test: (ctx) => !ctx.alive },
   { name: "transforming", test: (ctx) => ctx.transformTimer > 0 },
@@ -20,4 +41,10 @@ const RULES = [
   { name: "walking", test: (ctx) => ctx.grounded && Math.abs(ctx.vx) > 4 },
   { name: "idle", test: () => true },
 ];
-export function resolveAnimationState(ctx) { for (const rule of RULES) { if (rule.test(ctx)) return rule.name; } return "idle"; }
+
+export function resolveAnimationState(ctx) {
+  for (const rule of RULES) {
+    if (rule.test(ctx)) return rule.name;
+  }
+  return "idle";
+}

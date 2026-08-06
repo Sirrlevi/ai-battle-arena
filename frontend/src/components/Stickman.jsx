@@ -130,14 +130,19 @@ export default function Stickman({ fighter, pose, auraFilterId, effectType = nul
   // pose EASING, not game state.
   const DOWN_ANGLE = 82;
   let knockdownRotation = null;
+  // M1 FIX: ragdoll root = hips, and fall direction based on hitDir/fallDirection
+  // fallDirection from physics: back = peeth ke bal (correct for front hit), front = muh ke bal (only for back hit)
+  const fallDir = pose?.fallDirection || (pose?.hitDir >=0 ? 'back' : 'back'); // default back fall (fix Bug1)
+  const dirMultiplier = fallDir === 'back' ? 1 : -1;
+  // Use hitDir to flip if needed, but ensure back fall is away from attacker
   if (state === "knockdownFalling") {
     const t = Math.max(0, Math.min(1, 1 - knockdownTimer / 0.32));
-    knockdownRotation = DOWN_ANGLE * t;
+    knockdownRotation = DOWN_ANGLE * t * dirMultiplier;
   } else if (state === "knockdownDown") {
-    knockdownRotation = DOWN_ANGLE;
+    knockdownRotation = DOWN_ANGLE * dirMultiplier;
   } else if (state === "knockdownGettingUp") {
     const t = Math.max(0, Math.min(1, 1 - knockdownTimer / 0.55));
-    knockdownRotation = DOWN_ANGLE * (1 - t);
+    knockdownRotation = DOWN_ANGLE * (1 - t) * dirMultiplier;
   }
   const rotation = !alive ? 90 : knockdownRotation !== null ? knockdownRotation : hitStagger;
   const opacity = (alive ? 1 : 0.4) * teleportAlpha;
@@ -176,7 +181,7 @@ export default function Stickman({ fighter, pose, auraFilterId, effectType = nul
   const auraRy = 78 * aura.scale;
 
   return (
-    <g transform={`translate(${x}, ${y + skel.hop}) rotate(${rotation}) scale(${transformScale})`} opacity={opacity} filter={frozen ? "url(#frozenDesaturate)" : undefined}>
+    <g transform={`translate(${x}, ${y + skel.hop}) translate(0, -55) rotate(${rotation}) translate(0, 55) scale(${transformScale})`} opacity={opacity} filter={frozen ? "url(#frozenDesaturate)" : undefined}>
       {/* Speedster ghost trail — reuses the joint positions already computed
           above for the main body (no separate pose computation), a
           simplified spine+legs+head silhouette faded and offset behind the
