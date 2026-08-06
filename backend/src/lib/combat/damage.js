@@ -1,95 +1,95 @@
-// ---------- ADVANCED DAMAGE SYSTEM ----------
-// Phase 3.8, spec section 7. No Math.random() anywhere in this file — spec
-// section 7 is explicit that "Damage must NOT be random." Every number here
-// is a pure function of the two Combat Profiles, current resource state,
-// the ability, and arena conditions, so the same inputs always produce the
-// same output (spec section 16/12: "deterministic, explainable").
-//
-// "Accuracy" is still a real concept (spec section 4's Ability System has
-// an accuracy field) but it's resolved as a deterministic threshold check
-// against the defender's evasion score, not a dice roll — see resolveHit().
+
+// ---------- DAMAGE MODULE - M1 REWRITE WITH PHYSICS PROFILE ----------
+// Deterministic damage formula with weight class, density, physics profile
 
 import { tierGate, tierPowerScore } from "./tiers.js";
-import { statusMultiplier } from "./statusEffects.js";
-import { absorbWithShield } from "./resources.js";
+import { generateBackendPhysicsProfile } from "./physicsProfile.js";
 
-function evasionScore(profile, defenderState) {
-  const base = 20 + (profile?.mobility ?? 4) * 4 + (profile?.speed ?? 4) * 2;
-  const slow = statusMultiplier(defenderState, "mobilityMultiplier");
-  return Math.round(base * (slow === 0 ? 0.1 : slow));
-}
-
-/**
- * Deterministic hit resolution: ability.accuracy vs the defender's evasion,
- * both 0-100ish scales, compared directly rather than rolled against.
- * Guarding/blind/confusion statuses shift the effective accuracy instead of
- * introducing randomness.
- */
-export function resolveHit({ ability, attackerState, defenderState, defenderProfile }) {
-  if (!ability.canMiss) return { hits: true, margin: null };
-  let effectiveAccuracy = ability.accuracy * statusMultiplier(attackerState, "accuracyMultiplier");
-  const evasion = evasionScore(defenderProfile, defenderState);
-  const margin = effectiveAccuracy - evasion;
-  return { hits: margin >= -10, margin }; // small tolerance band, not randomness — a near-miss still lands weakly
-}
-
-function elementalResistanceMultiplier(defenderProfile, element) {
-  if (!defenderProfile) return 1;
-  const lower = (s) => (s || "").toLowerCase();
-  if ((defenderProfile.immunities || []).some((i) => lower(i).includes(element))) return 0;
-  if ((defenderProfile.resistances || []).some((r) => lower(r).includes(element))) return 0.4;
-  if ((defenderProfile.weaknesses || []).some((w) => lower(w).includes(element))) return 1.6;
+function elementalMultiplier(abilityElement, defenderResistances = [], defenderImmunities = [], defenderWeaknesses = []) {
+  const el = (abilityElement||'').toLowerCase();
+  if (!el) return 1;
+  if (defenderImmunities.some(w=>w.toLowerCase().includes(el))) return 0;
+  if (defenderResistances.some(w=>w.toLowerCase().includes(el))) return 0.6;
+  if (defenderWeaknesses.some(w=>w.toLowerCase().includes(el))) return 1.5;
   return 1;
 }
 
-/**
- * The single deterministic damage formula. Returns a full breakdown (not
- * just a number) so the Engine Verdict can explain exactly how the total
- * was reached — spec section 12.
- */
-export function computeDamage({ ability, attackerProfile, defenderProfile, attackerState, defenderState, round, arena }) {
-  const attackerTier = attackerProfile?.combatTierIndex ?? 1;
-  const defenderTier = defenderProfile?.combatTierIndex ?? 1;
+export function computeDamage({ ability, attackerProfile, defenderProfile, attackerState, defenderState, attackerTierIndex, defenderTierIndex }) {
+  const attPhys = generateBackendPhysicsProfile(attackerProfile);
+  const defPhys = generateBackendPhysicsProfile(defenderProfile);
 
-  const explicitBypass =
-    (attackerProfile?.ultimateAbility && ability.name && attackerProfile.ultimateAbility.toLowerCase().includes(ability.name.toLowerCase())) ||
-    (defenderProfile?.weaknesses || []).some((w) => (w || "").toLowerCase().includes((ability.element || "").toLowerCase()) && ability.element !== "physical");
+  // Tier gate
+  const gate = tierGate({ attackerTier: attackerProfile?.combatTierIndex ?? 1, defenderTier: defenderProfile?.combatTierIndex ?? 1, ability });
+  
+  // Base power from stats
+  const strength = attackerProfile?.strength ?? 4;
+  const combatSkill = attackerProfile?.combatSkill ?? 4;
+  const basePower = (strength*1.4 + combatSkill*0.8) * tierPowerScore(attackerProfile?.combatTierIndex ?? 1);
+  
+  // Fatigue
+  const energyRatio = (attackerState?.energy ?? 100) / 100;
+  const staminaRatio = (attackerState?.stamina ?? 100) / 100;
+  const fatigue = 0.6 + energyRatio*0.25 + staminaRatio*0.15;
 
-  const gate = tierGate({ attackerTier, defenderTier, bypass: explicitBypass });
+  // Element
+  const elemMult = elementalMultiplier(ability?.element, defenderProfile?.resistances, defenderProfile?.immunities, defenderProfile?.weaknesses);
 
-  const powerScore = tierPowerScore(attackerTier);
-  const statPower = (attackerProfile?.strength ?? 4) + (attackerProfile?.combatSkill ?? 4);
-  const energyRatio = attackerState.maxEnergy > 0 ? attackerState.energy / attackerState.maxEnergy : 1;
-  const staminaRatio = attackerState.maxStamina > 0 ? attackerState.stamina / attackerState.maxStamina : 1;
-  const fatigue = 0.55 + 0.45 * ((energyRatio + staminaRatio) / 2); // never below 55% output just for being tired
+  // Weight class: heavier attacker hits harder, but slower; energy/ethereal less mass but can bypass
+  const weightBonus = attPhys.isEthereal ? 0.7 : attPhys.isEnergy ? 0.9 : Math.min(1.6, 0.8 + attPhys.mass/300);
+  const massRatio = attPhys.mass / Math.max(10, defPhys.mass);
+  const massFactor = Math.min(1.8, Math.max(0.5, 0.7 + massRatio*0.3));
 
-  const defenseScore = (defenderProfile?.durability ?? 4) * 2 + (defenderState.armor || 0);
-  const resistMultiplier = elementalResistanceMultiplier(defenderProfile, ability.element);
+  // Density impact: denser hits harder
+  const densityFactor = 0.8 + (attPhys.density / Math.max(0.2, defPhys.density))*0.2;
 
-  const critical = ability.canCrit && attackerState.energy === attackerState.maxEnergy; // deterministic "peak condition" crit, not a roll
-  const critMultiplier = critical ? 1.25 : 1;
+  // Crit
+  const isCrit = ability?.crit || false;
+  const critMult = isCrit ? 1.6 : 1;
 
-  const debuffMultiplier = statusMultiplier(attackerState, "damageDealtMultiplier");
-  const vulnerabilityMultiplier = statusMultiplier(defenderState, "damageTakenMultiplier");
+  // Defense
+  const defense = (defenderProfile?.durability ?? 4) * 2 + (defenderState?.shield||0)*0.1;
+  const defenseMult = Math.max(0.15, 1 - defense/50);
 
-  let raw = (statPower * 1.8 + powerScore * 3) * fatigue;
-  raw = raw * gate.multiplier * resistMultiplier * critMultiplier * debuffMultiplier * vulnerabilityMultiplier;
-  raw = raw - defenseScore * 0.6;
-  raw = Math.max(gate.blocked ? 0 : 1, Math.round(raw));
+  let damage = basePower * 0.22 * fatigue * elemMult * weightBonus * massFactor * densityFactor * critMult * defenseMult * gate.multiplier;
+  
+  // Shield absorption
+  let shieldAbsorbed = 0;
+  if (defenderState?.shield > 0 && damage>0) {
+    shieldAbsorbed = Math.min(defenderState.shield, damage);
+    defenderState.shield -= shieldAbsorbed;
+    damage -= shieldAbsorbed;
+  }
 
-  const preShield = raw;
-  const finalDamage = Math.max(0, absorbWithShield(defenderState, raw));
+  // Deterministic rounding
+  damage = Math.max(0, Math.round(damage));
 
   return {
-    damage: finalDamage,
+    damage,
     breakdown: {
-      attackerTier: attackerProfile?.combatTier, defenderTier: defenderProfile?.combatTier,
-      tierGate: gate,
-      statPower, powerScore: Math.round(powerScore * 100) / 100, fatigue: Math.round(fatigue * 100) / 100,
-      defenseScore, resistMultiplier, critical, critMultiplier,
-      debuffMultiplier, vulnerabilityMultiplier,
-      preShieldDamage: preShield,
-      shieldAbsorbed: preShield - finalDamage,
+      basePower, fatigue, elemMult, weightBonus, massFactor, densityFactor, critMult, defenseMult, gate: gate.multiplier, shieldAbsorbed,
+      attackerMass: attPhys.mass,
+      defenderMass: defPhys.mass,
+      massRatio,
+      weightClass: attPhys.weightClass,
     },
+    attackerPhysics: attPhys,
+    defenderPhysics: defPhys,
+    tierGate: gate,
   };
+}
+
+export function resolveHit({ ability, attackerProfile, defenderProfile, attackerState, defenderState }) {
+  const acc = ability?.accuracy ?? 75;
+  const eva = defenderProfile?.speed ?? 4;
+  const evasionScore = eva * 6 + (defenderProfile?.combatSkill||4)*2;
+  const hitThreshold = acc - evasionScore*0.3;
+  // deterministic: if accuracy > threshold, hit
+  const hits = hitThreshold > 40 || ability?.alwaysHits;
+  return { hits, accuracy: acc, evasion: evasionScore, threshold: hitThreshold };
+}
+
+// For backend backward compat
+export function absorbWithShield(damage, shield) {
+  const absorbed = Math.min(shield, damage);
+  return { remaining: damage - absorbed, absorbed, shieldLeft: shield - absorbed };
 }

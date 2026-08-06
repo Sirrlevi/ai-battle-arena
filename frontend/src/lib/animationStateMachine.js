@@ -1,9 +1,6 @@
-// ---------- ANIMATION STATE MACHINE MODULE ----------
-// Not a strict transition table — a priority-ordered list of rules, each
-// testing the fighter's current physical/combat context. The first rule
-// that matches wins. Adding a new state later (e.g. "Staggered", "Casting")
-// is just inserting a new { name, test } entry at the right priority — no
-// existing rule has to change.
+
+// ---------- ANIMATION STATE MACHINE MODULE - M1 REWRITE ----------
+// Priority-ordered rules with new states for physics
 
 export const STATES = [
   "dead",
@@ -11,6 +8,7 @@ export const STATES = [
   "knockdownFalling",
   "knockdownDown",
   "knockdownGettingUp",
+  "sliding", // M1 new: down opponent slide (Bug4)
   "defensive",
   "hit",
   "attacking",
@@ -30,6 +28,7 @@ const RULES = [
   { name: "knockdownFalling", test: (ctx) => ctx.knockdownPhase === "falling" },
   { name: "knockdownDown", test: (ctx) => ctx.knockdownPhase === "down" },
   { name: "knockdownGettingUp", test: (ctx) => ctx.knockdownPhase === "gettingUp" },
+  { name: "sliding", test: (ctx) => ctx.isSliding || ctx.motion?.isSliding },
   { name: "defensive", test: (ctx) => ctx.knockdownPhase === "defensive" },
   { name: "hit", test: (ctx) => ctx.hitTimer > 0 },
   { name: "attacking", test: (ctx) => !!ctx.attackPhase },

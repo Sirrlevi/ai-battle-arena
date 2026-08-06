@@ -1,17 +1,11 @@
-// ---------- BATTLE STATE MODULE ----------
-// Owns the *shape* of a fighter and where they stand in the arena. Nothing
-// here knows how to draw a fighter (that's the renderer) or how combat math
-// works (that's the battle engine) — this is purely data.
+
+// ---------- BATTLE STATE MODULE - M1 REWRITE ----------
+// Owns fighter shape + physics profile generation
 
 export const ARENA_WIDTH = 1000;
 export const ARENA_HEIGHT = 420;
-export const GROUND_Y = 340; // every fighter's feet sit on this line for now
+export const GROUND_Y = 340;
 
-/**
- * Evenly spaces `count` fighters left-to-right across the arena. Works for
- * any roster size (2, 4, 8, 16, ...) without the renderer or engine caring —
- * it's just an array of {x, y} handed to whoever draws the scene.
- */
 export function computeSpawnPositions(count, arenaWidth = ARENA_WIDTH, groundY = GROUND_Y) {
   const margin = Math.min(140, arenaWidth * 0.12);
   if (count <= 1) return [{ x: arenaWidth / 2, y: groundY }];
@@ -24,13 +18,8 @@ export function computeSpawnPositions(count, arenaWidth = ARENA_WIDTH, groundY =
 
 const DEFAULT_COLORS = ["#7C6BFF", "#FF7A45", "#3ECF8E", "#E8B94A", "#E4443B", "#4AC7E8", "#E84AC0", "#B4E84A"];
 
-/**
- * Builds a fresh fighter record: identity fields from character generation
- * merged with live combat fields (hp/energy/status/cooldowns) and a fixed
- * spawn position. This is the single object shape every module downstream
- * (engine, renderer, HUD) agrees on.
- */
-export function createFighter({ key, index = 0, total = 2, provider, model, apiKey, customPrompt, character = {}, position }) {
+export function createFighter({ key, index = 0, total = 2, provider, model, apiKey, customPrompt, character = {}, position, combatProfile = null }) {
+  // M1: physics profile will be generated later from combatProfile, but we init placeholder
   return {
     key,
     provider,
@@ -52,6 +41,10 @@ export function createFighter({ key, index = 0, total = 2, provider, model, apiK
     cooldowns: {},
     alive: true,
     position: position || computeSpawnPositions(total)[index] || { x: ARENA_WIDTH / 2, y: GROUND_Y },
+    character: character,
+    combatProfile: combatProfile,
+    physicsProfile: null, // generated via generatePhysicsProfile
+    transformations: [], // track form changes for regen
   };
 }
 
@@ -65,5 +58,13 @@ export function resetFighterCombatState(fighter) {
     status: [],
     cooldowns: {},
     alive: true,
+    physicsProfile: fighter.physicsProfile, // keep physics
   };
+}
+
+// Check if should regen physics (transformation etc)
+export function checkPhysicsRegen(fighter, eventType, description) {
+  const text = `${eventType||''} ${description||''}`.toLowerCase();
+  const triggers = ['transform','evolve','mutate','fuse','grow','shrink','form','ascend','giant','colossal','tiny','enlarge'];
+  return triggers.some(t=>text.includes(t));
 }

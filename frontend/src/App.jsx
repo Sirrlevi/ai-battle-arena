@@ -2,6 +2,14 @@ import { useState, useRef, useEffect } from "react";
 import { Swords, Play, Pause, RotateCcw, AlertTriangle, Loader2, ChevronLeft, ChevronRight, Circle, Square } from "lucide-react";
 import { createSession, setSessionKeys, generateCharacter as apiGenerateCharacter, battleTurn as apiBattleTurn, waitForBackend, API_BASE, ApiError, getMemory, getAuthority, setAuthority as apiSetAuthority } from "./api.js";
 import { createFighter, resetFighterCombatState, computeSpawnPositions, ARENA_WIDTH, GROUND_Y } from "./lib/battleState.js";
+import { generatePhysicsProfile, shouldRegeneratePhysicsProfile } from "./lib/physicsProfile.js";
+import { validateSimulationAction } from "./lib/simulationCore.js";
+import { calculateImpact, getFallAnimation, getHitJuice } from "./lib/impactSystem.js";
+import { resolveAllOverlaps } from "./lib/collisionSystem.js";
+import { setAnimPhysicsProfile } from "./lib/animationController.js";
+
+// M1 Helper
+function ensurePhysicsProfile(fighter, combatProfile, character){ try{ const cp=combatProfile||fighter.combatProfile||{combatTier:"Peak Human",strength:4,durability:4,speed:4,mobility:4,combatSkill:4,flight:false}; const ch=character||fighter.character||{name:fighter.name}; const p=generatePhysicsProfile(cp,ch); fighter.physicsProfile=p; return p;}catch(e){ const fb=generatePhysicsProfile({combatTier:"Peak Human",strength:4,durability:4,speed:4,mobility:4,combatSkill:4},{name:fighter.name}); fighter.physicsProfile=fb; return fb; } }
 import { resolveAction, tickStatus } from "./lib/battleEngine.js";
 import { interpretAction } from "./lib/actionInterpreter.js";
 import { createAnimState, queueAction, updateAnimation, applyHitReaction, triggerKnockdown, triggerTransformation, registerTurnOutcome, hitStaggerDegrees } from "./lib/animationController.js";
@@ -394,6 +402,98 @@ export default function App() {
   // constant micro-freezes; `Math.max` so an already-active hitstop from a
   // simultaneous event is never shortened.
   function triggerHitstop(damage = 0, lethal = false) {
+    if (damage < 4 && !lethal) return;
+    const base = Math.min(0.1, 0.02 + damage * 0.0016);
+    hitstopRef.current = Math.max(hitstopRef.current, lethal ? base + 0.05 : base);
+  }
+
+  function handleImpact(actorAnim, targetKey, impact) {
+    const targetAnim = animRef.current[targetKey];
+    if (!targetAnim) return;
+    if (impact.spawnBeamClash) {
+      const originA = projectileOrigin(actorAnim, impact.projectileVariant);
+      const originB = projectileOrigin(targetAnim, impact.counterVariant);
+      spawnBeamClashPair(projectileManagerRef.current, {
+        variantA: impact.projectileVariant, fromAX: originA.x, fromAY: originA.y, toAX: targetAnim.motion.x, toAY: targetAnim.motion.y + TORSO_OFFSET_Y,
+        ownerAKey: actorAnim.key, targetAKey: targetKey, payloadA: { damage: impact.damage, result: impact.result }, colorA: impact.power?.color, glowColorA: impact.power?.glow,
+        variantB: impact.counterVariant, fromBX: originB.x, fromBY: originB.y, toBX: actorAnim.motion.x, toBY: actorAnim.motion.y + TORSO_OFFSET_Y,
+        ownerBKey: targetKey, targetBKey: actorAnim.key, payloadB: { damage: impact.counterDamage, result: "hit" },
+        onClash: (cx, cy) => {
+          triggerCameraEvent(cameraRef.current, "beam-clash");
+          triggerCameraEvent(cameraRef.current, "motion-blur", { intensity: 0.8 });
+          emitParticles(particleSystemRef.current, "energy", cx, cy, { intensity: "high" });
+          emitParticles(particleSystemRef.current, "explosion_ring", cx, cy, { intensity: "medium" });
+          hitstopRef.current = Math.max(hitstopRef.current, 0.18);
+        },
+      });
+      return;
+    }
+    if (impact.spawnProjectile) {
+      const origin = projectileOrigin(actorAnim, impact.projectileVariant);
+      spawnProjectile(projectileManagerRef.current, {
+        variant: impact.projectileVariant, fromX: origin.x, fromY: origin.y, toX: targetAnim.motion.x, toY: targetAnim.motion.y + TORSO_OFFSET_Y,
+        ownerKey: actorAnim.key, targetKey, payload: { damage: impact.damage, result: impact.result, power: impact.power }, bounds: MOTION_BOUNDS, color: impact.power?.color, glowColor: impact.power?.glow,
+      });
+      if (impact.power?.special === "timeSlow") { timeSlowRef.current = TIME_SLOW_DURATION; triggerCameraEvent(cameraRef.current, "impact-flash", { intensity: 0.3 }); }
+      return;
+    }
+    if (impact.result === "hit" || impact.result === "lethal" || impact.result === "counter") {
+      const isDown = targetAnim.knockdownPhase === "down" || targetAnim.isSliding;
+      const physImpact = calculateImpact({
+        attackerPos: { x: actorAnim.motion.x, y: actorAnim.motion.y },
+        defenderPos: { x: targetAnim.motion.x, y: targetAnim.motion.y },
+        attackerMotion: actorAnim.motion, defenderMotion: targetAnim.motion,
+        attackerProfile: actorAnim.physicsProfile || { mass:75,density:1,weightClass:'Medium',derivedFrom:{strength:4},weightDef:{},collisionBehaviour:{},flightPhysics:{} },
+        defenderProfile: targetAnim.physicsProfile || { mass:75,density:1,weightClass:'Medium',knockbackResistance:75,weightDef:{},collisionBehaviour:{groundFriction:0.6},flightPhysics:{} },
+        damage: impact.damage, attackSpeed: impact.power?.tier==='massive'?420:300, isDown,
+      });
+      const powerTier = PHYSICS_TIERS[impact.power?.tier] || PHYSICS_TIERS.medium;
+      const dmgTier = impactTierFor(impact.damage);
+      if (isDown) {
+        applyHitReaction(targetAnim, impact.damage, actorAnim, impact);
+      } else if (dmgTier.falls || impact.damage > 18) {
+        triggerKnockdown(targetAnim, impact.damage, actorAnim, impact);
+        targetAnim.fallDirection = physImpact.fallDirection;
+      } else {
+        applyHitReaction(targetAnim, impact.damage, actorAnim, impact);
+      }
+      hitstopRef.current = Math.max(hitstopRef.current, (physImpact.hitstop||60)/1000);
+      triggerHitstop(impact.damage, impact.result==="lethal", physImpact);
+      if (physImpact.cameraShake) triggerCameraEvent(cameraRef.current, physImpact.cameraShake, { intensity: physImpact.shakeIntensity });
+      else if (dmgTier.camera) triggerCameraEvent(cameraRef.current, dmgTier.camera);
+      if (actorAnim.motion && physImpact.impactForce>50) {
+        const recoilDir = -Math.sign(physImpact.impactDir.x);
+        actorAnim.motion.vx += recoilDir * Math.min(80, physImpact.impactForce*0.08);
+      }
+      pushDamageNumber(targetAnim.motion.x, targetAnim.motion.y + TORSO_OFFSET_Y, impact.damage, HIT);
+      triggerImpactFrame(targetAnim.motion.x, impact.damage, impact.result==="lethal", powerTier.impact * (physImpact.impactForce/200));
+      if (impact.power) emitParticles(particleSystemRef.current, impact.power.particle, targetAnim.motion.x, targetAnim.motion.y + TORSO_OFFSET_Y, { intensity: impact.power.tier==="massive"||impact.power.tier==="heavy"?"high":"medium", color: impact.power.color });
+      if (physImpact.debrisCount>0) {
+        emitParticles(particleSystemRef.current, "debris", targetAnim.motion.x, targetAnim.motion.groundY, { count: physImpact.debrisCount });
+        emitParticles(particleSystemRef.current, "dust", targetAnim.motion.x, targetAnim.motion.groundY, { intensity: physImpact.dustAmount>0.5?"high":"low" });
+      }
+      if (physImpact.crackIntensity>0.5) emitParticles(particleSystemRef.current, "rock_fragment", targetAnim.motion.x, targetAnim.motion.groundY, { count: 2 });
+      if (impact.power?.special==="timeStop") {
+        targetAnim.timeFrozenTimer = TIME_STOP_DURATION;
+        triggerCameraEvent(cameraRef.current, "camera-snap");
+        emitParticles(particleSystemRef.current, "magic_circle", targetAnim.motion.x, targetAnim.motion.y + TORSO_OFFSET_Y, { intensity:"high" });
+      }
+      const allAnimsList = Object.values(animRef.current).filter(Boolean);
+      if (allAnimsList.length>1) {
+        const fightersForSep = allAnimsList.map(a=>({ x:a.motion.x, y:a.motion.y, motion:a.motion, physicsProfile:a.physicsProfile }));
+        resolveAllOverlaps(fightersForSep, 52);
+        allAnimsList.forEach((a,i)=>{ a.motion.x = fightersForSep[i].x; });
+      }
+      return;
+    }
+    if (impact.result==="miss") pushDamageNumber(targetAnim.motion.x, targetAnim.motion.y + TORSO_OFFSET_Y, "MISS", DIM);
+  }
+function triggerHitstop(damage, isLethal, physImpact) {
+    const base = isLethal?0.14:Math.min(0.12,Math.max(0.03,(damage||0)*0.004));
+    const extra = physImpact ? (physImpact.hitstop||0)/1000*0.5 : 0;
+    hitstopRef.current = Math.max(hitstopRef.current, base+extra);
+  }
+function triggerHitstop(damage = 0, lethal = false) {
     if (damage < 4 && !lethal) return;
     const base = Math.min(0.1, 0.02 + damage * 0.0016);
     hitstopRef.current = Math.max(hitstopRef.current, lethal ? base + 0.05 : base);

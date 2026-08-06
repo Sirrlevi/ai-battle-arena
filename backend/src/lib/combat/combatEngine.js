@@ -23,6 +23,7 @@ import { computeDamage, resolveHit } from "./damage.js";
 import { applyStatus, tickStatuses } from "./statusEffects.js";
 import { spend, setCooldown, applyShield } from "./resources.js";
 import { tierGate, tierPowerScore } from "./tiers.js";
+import { generateBackendPhysicsProfile, computeImpactPhysics } from "./physicsProfile.js";
 import { applyFormToProfile, resolveFormKey } from "./forms.js";
 
 /**
@@ -33,11 +34,22 @@ import { applyFormToProfile, resolveFormKey } from "./forms.js";
  * figure derived from the same damage math, so the client's physics layer
  * has something grounded to animate instead of a guess.
  */
-function computePhysics({ damage, ability, attackerTierIndex }) {
+function computePhysics({ damage, ability, attackerTierIndex, attackerProfile, defenderProfile }) {
   if (damage <= 0) return { knockback: 0, impactRadius: ability.areaOfEffect ? 3 : 1 };
-  const knockback = Math.round(Math.min(60, damage * 0.9 + attackerTierIndex * 2));
-  const impactRadius = ability.areaOfEffect ? Math.max(3, Math.round(damage / 12)) : 1;
-  return { knockback, impactRadius, terrainDamage: ability.areaOfEffect && damage > 25 };
+  try {
+    // M1 dynamic physics
+    const massA = attackerProfile ? (attackerProfile.strength||4)*18 + 20 : 75;
+    const massD = defenderProfile ? (defenderProfile.durability||4)*15 + 20 : 75;
+    const massRatio = massA / Math.max(10, massD);
+    const base = Math.round(Math.min(70, damage * 0.9 + attackerTierIndex * 2.2));
+    const knockback = Math.round(base * Math.max(0.4, Math.min(1.8, massRatio)));
+    const impactRadius = ability.areaOfEffect ? Math.max(3, Math.round(damage / 12)) : 1;
+    return { knockback, impactRadius, terrainDamage: ability.areaOfEffect && damage > 25, massRatio, attackerMass: massA, defenderMass: massD };
+  } catch(e) {
+    const knockback = Math.round(Math.min(60, damage * 0.9 + attackerTierIndex * 2));
+    const impactRadius = ability.areaOfEffect ? Math.max(3, Math.round(damage / 12)) : 1;
+    return { knockback, impactRadius, terrainDamage: ability.areaOfEffect && damage > 25 };
+  }
 }
 
 const NO_DEFENSE = { chosenResponse: "none", damageMultiplier: 1, hitOverride: null, note: "No special defense chosen." };
@@ -233,7 +245,7 @@ export function simulateTurn({
     if (applied) statusApplied.push({ type: statusType, roundsLeft: applied.roundsLeft, stacks: applied.stacks });
   }
 
-  const physics = computePhysics({ damage, ability, attackerTierIndex: selfProfile?.combatTierIndex ?? 1 });
+  const physics = computePhysics({ damage, ability, attackerTierIndex: selfProfile?.combatTierIndex ?? 1, attackerProfile: selfProfile, defenderProfile: enemyProfile });
 
   const defenseNote = defenseEffect.chosenResponse !== "none" ? ` Defender's response: ${defenseEffect.note}` : "";
 

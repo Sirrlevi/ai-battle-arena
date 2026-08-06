@@ -698,3 +698,63 @@ export function lerpPose(a, b, t) {
 }
 
 export { clamp, mix };
+
+
+// ---------- M1 FIXES: RAGDOLL ROOT = HIPS, FALL DIRECTION PHYSICS ----------
+export const RAGDOLL_ROOT = 'hips'; // FIX for Bug1: was head, now hips
+export const FALL_DIRECTIONS = { BACK: 'back', FRONT: 'front' };
+
+export function getRagdollPivot() {
+  return { x: 0, y: RIG.HIP_Y, isHips: true }; // hips at -55
+}
+
+// Physics-aware fall pose - replaces face-forward fall
+export function poseFallBack(prog, facing, impactDirX, seed) {
+  const p = basePose();
+  const dir = impactDirX >=0 ? 1 : -1;
+  // Upper body goes back (torque), so back fall
+  p.waistLean = -35 * dir * prog;
+  p.chestLean = -45 * dir * prog;
+  p.neckTilt = -20 * dir * prog;
+  p.headTilt = -15 * dir * prog;
+  p.legL.upper = -10 * dir;
+  p.legR.upper = -15 * dir;
+  p.legL.lower = 20;
+  p.legR.lower = 25;
+  p.armL.upper = 30 * dir;
+  p.armR.upper = 40 * dir;
+  p.crouch = prog * 0.6;
+  p.stance = seed.stanceWidth * (1 - prog*0.3);
+  return p;
+}
+
+export function poseFallFront(prog, facing, impactDirX, seed) {
+  // Only for back-hit (should be rare)
+  const p = basePose();
+  const dir = impactDirX >=0 ? 1 : -1;
+  p.waistLean = 35 * dir * prog;
+  p.chestLean = 45 * dir * prog;
+  p.legL.upper = 15 * dir;
+  p.legR.upper = 10 * dir;
+  p.armL.upper = -20 * dir;
+  p.armR.upper = -30 * dir;
+  p.crouch = prog * 0.5;
+  return p;
+}
+
+export function poseSlide(prog, facing, slideDir, seed) {
+  // Bug4 fix: down opponent slides, no pop-up
+  const p = basePose();
+  const dir = slideDir >=0 ? 1 : -1;
+  p.waistLean = -85 * prog; // lying flat
+  p.chestLean = -80 * prog;
+  p.legL.upper = -80 + dir*5;
+  p.legR.upper = -85;
+  p.legL.lower = 10;
+  p.legR.lower = 15;
+  p.armL.upper = -70;
+  p.armR.upper = -70;
+  p.crouch = 0.8;
+  p.hop = -0.6; // low to ground
+  return p;
+}
