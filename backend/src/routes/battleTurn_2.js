@@ -8,7 +8,7 @@ export const battleTurnRouter = Router();
 
 battleTurnRouter.post("/battle-turn", requireSession, async (req, res, next) => {
   try {
-    const { fighter, round, self, enemy, recentTurns, customPrompt } = req.body || {};
+    const { fighter, round, self, enemy, recentTurns, customPrompt, positions } = req.body || {};
     if (fighter !== "A" && fighter !== "B") {
       throw new AppError('fighter must be "A" or "B".', { code: "VALIDATION_ERROR", status: 400 });
     }
@@ -42,6 +42,7 @@ battleTurnRouter.post("/battle-turn", requireSession, async (req, res, next) => 
       enemy,
       recentTurns: turns,
       customPrompt,
+      positions,
       referer: req.headers.origin,
     });
 

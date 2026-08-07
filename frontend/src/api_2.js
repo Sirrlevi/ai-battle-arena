@@ -118,10 +118,10 @@ export async function generateCharacter(sessionId, fighter, customPrompt) {
   return character;
 }
 
-export async function battleTurn(sessionId, fighter, round, self, enemy, recentTurns, customPrompt) {
+export async function battleTurn(sessionId, fighter, round, self, enemy, recentTurns, customPrompt, positions) {
   return request("/api/battle-turn", {
     method: "POST",
-    body: JSON.stringify({ sessionId, fighter, round, self, enemy, recentTurns, customPrompt }),
+    body: JSON.stringify({ sessionId, fighter, round, self, enemy, recentTurns, customPrompt, positions }),
   }); // { action, reality, narration, verdict }
 }
 

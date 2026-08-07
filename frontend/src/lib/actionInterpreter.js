@@ -6,6 +6,7 @@
 // and new wording all route through the same categories without code
 // changes, and adding a new category later is just another entry below.
 
+import { COMBAT_MOVES } from "./stickmanCombatPack.js";
 import { matchPower } from "./powerCatalog.js";
 
 const CATEGORY_KEYWORDS = [
@@ -44,6 +45,13 @@ const CATEGORY_KEYWORDS = [
  * category/variant, so this is purely additive.
  */
 export function interpretAction(entry) {
+  const abilityLower = (entry.ability_name||'').toLowerCase() + ' ' + (entry.description||'').toLowerCase();
+  const combatMove = COMBAT_MOVES.find(m => abilityLower.includes(m.name.toLowerCase()) || abilityLower.includes(m.slug));
+  if (combatMove) {
+    const power = matchPower ? matchPower(entry.ability_name + ' ' + entry.description) : null;
+    return { category: 'melee', variant: combatMove.slug, power, isCombatMove: true, combatMove, moveId: combatMove.id };
+  }
+
   if (entry.action === "Defend" || entry.result === "defend") {
     return { category: "block", variant: "guard" };
   }

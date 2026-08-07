@@ -35,7 +35,7 @@ import { requestDefensePacket } from "../combat/defensePacket.js";
 import { validateDefensePacket } from "../combat/validation.js";
 import { recordAttackOutcome, recordDefenseOutcome, summarizeNegotiationPatterns } from "../combat/negotiationMemory.js";
 
-export async function runTurn({ session, sessionId, fighterKey, opponentKey, config, round, self, enemy, recentTurns, customPrompt, referer }) {
+export async function runTurn({ session, sessionId, fighterKey, opponentKey, config, round, self, enemy, recentTurns, customPrompt, positions, referer }) {
   // 1. Observe + 2. Update Memory
   const mem = getOrCreateMemory(session, fighterKey, { personality: self.personality, combatStyle: self.combatStyle, weapon: self.weapon, aura: self.aura });
   updateSelfState(mem, self);
@@ -90,6 +90,9 @@ export async function runTurn({ session, sessionId, fighterKey, opponentKey, con
     worldState = buildWorldStateView({
       round, selfState: selfResourceState, enemyState: enemyResourceState,
       selfProfile, enemyProfile, arenaMemory,
+      selfPosition: positions?.self || null,
+      enemyPosition: positions?.enemy || null,
+      livePositions: positions || null,
     });
     // Phase 3.9 section 10: "should adapt instead of repeating attacks" —
     // fold in what's been learned about the opponent's defensive habits.
@@ -188,6 +191,9 @@ export async function runTurn({ session, sessionId, fighterKey, opponentKey, con
       const defenderWorldState = buildWorldStateView({
         round, selfState: enemyResourceState, enemyState: selfResourceState,
         selfProfile: enemyProfile, enemyProfile: selfProfile, arenaMemory,
+        selfPosition: positions?.enemy || null,
+        enemyPosition: positions?.self || null,
+        livePositions: positions ? { self: positions.enemy, enemy: positions.self, distance: positions.distance, side: positions.side==='left'?'right':'left' } : null,
       });
       defenderWorldState.opponent.negotiationPatterns = summarizeNegotiationPatterns(session, fighterKey);
 

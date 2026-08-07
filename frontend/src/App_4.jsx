@@ -911,6 +911,15 @@ export default function App() {
     // fresh or picked up from `pending` after resolving in the background.
     function fetchDecision(fighter, opponent, round) {
       const recentTurns = logRef.current.filter((l) => !l.system).slice(-10);
+      // M2: Include live positions so AI knows where opponent is (teleport etc)
+      const attackerAnim = animRef.current[fighter.key];
+      const defenderAnim = animRef.current[opponent.key];
+      const positions = {
+        self: { x: attackerAnim?.motion?.x ?? fighter.position?.x ?? 0, y: attackerAnim?.motion?.y ?? 0, facing: attackerAnim?.motion?.facing ?? 1, vx: attackerAnim?.motion?.vx ?? 0, vy: attackerAnim?.motion?.vy ?? 0, isTeleporting: attackerAnim?.motion?.mode?.includes('teleport') || false, isSliding: attackerAnim?.isSliding || false, knockdownPhase: attackerAnim?.knockdownPhase || null },
+        enemy: { x: defenderAnim?.motion?.x ?? opponent.position?.x ?? 0, y: defenderAnim?.motion?.y ?? 0, facing: defenderAnim?.motion?.facing ?? -1, vx: defenderAnim?.motion?.vx ?? 0, vy: defenderAnim?.motion?.vy ?? 0, isTeleporting: defenderAnim?.motion?.mode?.includes('teleport') || false, isSliding: defenderAnim?.isSliding || false, knockdownPhase: defenderAnim?.knockdownPhase || null },
+        distance: Math.abs((attackerAnim?.motion?.x ?? 0) - (defenderAnim?.motion?.x ?? 0)),
+        side: (defenderAnim?.motion?.x ?? 0) > (attackerAnim?.motion?.x ?? 0) ? 'right' : 'left',
+      };
       return apiBattleTurn(
         sessionId,
         fighter.key,
@@ -918,7 +927,8 @@ export default function App() {
         { name: fighter.name, hp: fighter.hp, energy: fighter.energy, status: fighter.status.map((s) => s.type), combatStyle: fighter.combatStyle, personality: fighter.personality, weapon: fighter.weapon, aura: fighter.aura },
         { name: opponent.name, hp: opponent.hp, energy: opponent.energy, status: opponent.status.map((s) => s.type) },
         recentTurns,
-        fighter.customPrompt
+        fighter.customPrompt,
+        positions
       )
         .then((result) => ({ ok: true, result }))
         .catch((error) => ({ ok: false, error }));

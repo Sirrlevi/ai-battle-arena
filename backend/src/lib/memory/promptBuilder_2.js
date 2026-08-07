@@ -32,7 +32,7 @@ export function buildTurnSystemPrompt({ fighterName, combatStyle, personality, w
     : "";
   const statsClause =
     authorityMode === "engine"
-      ? `You can see your own AND your opponent's live HP, energy, mana, stamina, shield, cooldowns, and status effects ` +
+      ? `You can see your own AND your opponent's live HP, energy, mana, stamina, shield, cooldowns, status effects, AND LIVE POSITION (x,y,facing,velocity), energy, mana, stamina, shield, cooldowns, and status effects ` +
         `— both sides, every turn — in the "world_state" of the user message. Weigh them before choosing: press the ` +
         `advantage when your resources or position beat theirs, play safer or defensively when they don't, and factor ` +
         `in what's already on cooldown for both of you. Never just repeat a strong-sounding move out of habit — the ` +
@@ -109,6 +109,6 @@ export function buildTurnUserPrompt({ round, mem, self, enemy, arenaMemory, auth
     recent_events: recentEvents.length ? recentEvents : ["Battle just began."],
     long_term_memory: mem.longTermSummary,
     current_goal: mem.currentGoal,
-    instruction: "Decide your action for this turn as the JSON schema described, staying consistent with your personality and the strategic notes.",
+    instruction: "Decide your action for this turn. CRITICAL: Check world_state.livePositions and world_state.distance for opponent current position. If opponent is on your RIGHT (positive relativeX), you are on LEFT - face right (1) and aim right. If on LEFT (negative relativeX), face left (-1) and aim left. If distance is far, either close distance (movement: \"close distance to X\") or use projectile. If melee, ensure you are in melee range first. If opponent just teleported (isTeleporting), their X changed - use new X. If opponent is down (knockdownPhase=down), they are on ground - you can hit but they will slide. Always include movement field to show you are tracking position.",
   });
 }
