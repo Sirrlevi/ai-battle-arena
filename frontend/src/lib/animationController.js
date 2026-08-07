@@ -7,6 +7,7 @@
 
 import { createMotionState, updateMotion, issueCommand } from "./movementController.js";
 import { resolveAnimationState } from "./animationStateMachine.js";
+import { getTierForDamage, getImpactForTier, DEFENSIVE_STANCE } from "./damageTiers.js";
 
 // Contact distance per melee-style variant, derived from the actual rig
 // geometry in characterAnimation.js (RIG.UPPER_ARM/LOWER_ARM/HAND_R for
@@ -279,13 +280,72 @@ export function queueAction(anim, intent, opponentAnim, entry) {
 const MAX_HIT_STAGGER_DEGREES = 22;
 
 export function applyHitReaction(anim, fromX, damage = 0, knockbackMultiplier = 1) {
-  anim.hitTimer = HIT_REACT_DURATION;
-  anim.flashTimer = FLASH_DURATION;
-  anim.lastHitDamage = damage; // Phase 4A: see field comment in createAnimState above
-  const dir = anim.motion.x >= fromX ? 1 : -1;
-  anim.hitDir = dir; // which way they were knocked — see hitStaggerDegrees below
-  anim.motion.vx = dir * KNOCKBACK_SPEED * knockbackMultiplier;
+  // M3: Damage-tiered reaction system
+  let actualDamage = damage;
+  let attackerAnim = null;
+  let impact = null;
+  let fromXVal = fromX;
+  
+  // Detect new signature: (anim, damage, attackerAnim, impact)
+  if (typeof fromX === 'number' && typeof damage === 'object' && damage !== null && damage.motion) {
+    actualDamage = fromX;
+    attackerAnim = damage;
+    impact = knockbackMultiplier;
+    fromXVal = attackerAnim.motion.x;
+  } else if (typeof fromX === 'number' && typeof damage === 'number' && typeof knockbackMultiplier === 'object') {
+    actualDamage = fromX;
+    attackerAnim = damage;
+    impact = knockbackMultiplier;
+    fromXVal = attackerAnim.motion ? attackerAnim.motion.x : 0;
+  }
+  
+  const tier = getTierForDamage(actualDamage || 0);
+  anim.lastHitDamage = actualDamage;
+  anim.hitTimer = 0.15 + tier.knockback * 0.12;
+  anim.flashTimer = 0.18;
+  anim.lastDamageTier = tier;
+  
+  const dir = anim.motion.x >= (fromXVal||0) ? 1 : -1;
+  anim.hitDir = dir;
+  anim.fallDirection = tier.anim.fallDirection || 'back';
+  
+  // Tier-based knockback
+  if (tier.min < 5) {
+    // 0-5: same as before - tiny flinch
+    const massFactor = anim.physicsProfile ? Math.max(0.4, 150/(anim.physicsProfile.mass||75)) : 1;
+    anim.motion.vx = dir * 260 * tier.knockback * massFactor;
+  } else if (tier.min < 10) {
+    // 5-10: thoda jyada shake, 12px piche
+    const massFactor = anim.physicsProfile ? Math.max(0.4, 150/(anim.physicsProfile.mass||75)) : 1;
+    anim.motion.vx = dir * 260 * tier.knockback * massFactor;
+    anim.hitTimer = 0.22;
+  } else if (tier.min < 20) {
+    // 10-20: aur jyada, 28px, stumble
+    const massFactor = anim.physicsProfile ? Math.max(0.4, 150/(anim.physicsProfile.mass||75)) : 1;
+    anim.motion.vx = dir * 300 * tier.knockback * massFactor;
+    anim.hitTimer = 0.28;
+  } else {
+    // 20+: use impact system for launch
+    if (impact && impact.launchVelocity) {
+      const massFactor = anim.physicsProfile ? Math.max(0.4, 150/(anim.physicsProfile.mass||75)) : 1;
+      anim.motion.vx = impact.launchVelocity.x * massFactor || dir * tier.knockback * 80;
+      anim.motion.vy = impact.launchVelocity.y * 0.5 || tier.anim.hop * 10;
+      if (tier.anim.airTime > 0.15) anim.motion.grounded = false;
+    } else {
+      const massFactor = anim.physicsProfile ? Math.max(0.4, 150/(anim.physicsProfile.mass||75)) : 1;
+      anim.motion.vx = dir * (tier.anim.launchSpeed || tier.knockback*100) * massFactor;
+      anim.motion.vy = tier.anim.hop * 10 || -100;
+      if (tier.min >= 20) anim.motion.grounded = false;
+    }
+  }
+  
+  // Store tier for rendering
+  anim.impactData = { ...impact, tier, damage: actualDamage };
+  
+  return { knockback: tier.knockback * 260, dir, tier, fallDirection: tier.anim.fallDirection };
 }
+
+
 
 /**
  * Heavier alternative to applyHitReaction, for a damage tier that should

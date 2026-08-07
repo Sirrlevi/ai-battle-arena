@@ -7,6 +7,7 @@
 // short lines) ever go in.
 
 import { ANTI_BORING_PROMPT_CLAUSE } from "../authority/antiBoringRule.js";
+import { classifyRange, ATTACK_RANGES, COMBO_MOVES_CATALOG, getCharacterArchetype, getAvailableMovesForArchetype } from "../combat/attackDefinitions.js";
 
 const AUTHORITY_CLAUSE = {
   engine:
@@ -24,6 +25,15 @@ const AUTHORITY_CLAUSE = {
 };
 
 export function buildTurnSystemPrompt({ fighterName, combatStyle, personality, weapon, aura, customPrompt, strategyHint, goal, authorityMode, combatProfile }) {
+  const archetype = getCharacterArchetype(combatStyle, combatProfile?.knownPowers);
+  const movesInfo = getAvailableMovesForArchetype(archetype);
+
+  const archetypeInfo = (() => {
+    const arch = getCharacterArchetype(combatStyle, combatProfile?.knownPowers);
+    const info = getAvailableMovesForArchetype(arch);
+    return { arch, info };
+  })();
+  const comboClause = ` Your archetype: ${archetypeInfo.arch}. ${archetypeInfo.info.description} Available combo moves in game: ${COMBO_MOVES_CATALOG.slice(0,50).join(', ')}... (total 120 moves). LONG RANGE attacks (laser, beam, blast, fireball, arrow, etc) can be used from far (up to 900px) without closing distance. SHORT RANGE attacks (punches, kicks, elbows, knees, headbutts, clinch) MUST close distance to 60px before hitting. If you are hand-to-hand specialist, you are FORCED to use combo moves, not repeat basic strike. Use variety! `;
   const profileClause = combatProfile
     ? ` Your Combat Profile (the mechanical ground truth for this battle — stay consistent with it): tier ${combatProfile.combatTier}, ` +
       `strength ${combatProfile.strength}/10, speed ${combatProfile.speed}/10, durability ${combatProfile.durability}/10, ` +
@@ -46,7 +56,7 @@ export function buildTurnSystemPrompt({ fighterName, combatStyle, personality, w
     `Weapon: ${weapon || "none stated"}. Aura: ${aura || "none stated"}. ` +
     `Stay true to this personality for the entire battle — it must not drift turn to turn. ` +
     `${AUTHORITY_CLAUSE[authorityMode] || AUTHORITY_CLAUSE.engine}${profileClause} ` +
-    `Every ability should imply a cost or a weakness and should not be reused every single turn — prefer creativity over repetition. ` +
+    `Every ability should imply a cost or a weakness and should not be reused every single turn — prefer creativity over repetition. ${comboClause} ` +
     `Every ability is either short-range (melee — punches, kicks, blades, grapples: your fighter physically closes the distance to land it) ` +
     `or long-range (a projectile, beam, or blast — laser, arrow, energy bolt, thrown attack: usable from right where you are, no need to close in). ` +
     `Make which one an ability is clear from its name or description. ` +
@@ -63,6 +73,9 @@ export function buildTurnSystemPrompt({ fighterName, combatStyle, personality, w
 }
 
 export function buildTurnUserPrompt({ round, mem, self, enemy, arenaMemory, authorityMode, worldState }) {
+  const recentPowers = mem.self.recentPowers || [];
+  const hasRepeatedBasicStrike = recentPowers.filter(p=>p.toLowerCase().includes('basic strike')).length >= 2;
+  const varietyClause = hasRepeatedBasicStrike ? " WARNING: You have repeated Basic Strike multiple times. You MUST use a different combo move now. Choose from: " + COMBO_MOVES_CATALOG.slice(0,20).join(', ') + ". DO NOT use Basic Strike again! " : "";
   const recentEvents = mem.shortTerm.slice(-6).map((t) => {
     const who = t.actorKey === mem.fighterKey ? "You" : "Opponent";
     const reasoning = t.thought ? ` (reasoning: "${t.thought}")` : "";
@@ -107,6 +120,9 @@ export function buildTurnUserPrompt({ round, mem, self, enemy, arenaMemory, auth
     // are byte-for-byte unchanged.
     world_state: worldState || undefined,
     recent_events: recentEvents.length ? recentEvents : ["Battle just began."],
+    variety_warning: varietyClause || undefined,
+    combo_catalog: COMBO_MOVES_CATALOG.slice(0,60),
+    attack_range_definitions: { long_range: ATTACK_RANGES.LONG, short_range: ATTACK_RANGES.SHORT },
     long_term_memory: mem.longTermSummary,
     current_goal: mem.currentGoal,
     instruction: "Decide your action for this turn as the JSON schema described, staying consistent with your personality and the strategic notes.",
