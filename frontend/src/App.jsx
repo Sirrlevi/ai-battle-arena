@@ -2,9 +2,6 @@ import { useState, useRef, useEffect } from "react";
 import { Swords, Play, Pause, RotateCcw, AlertTriangle, Loader2, ChevronLeft, ChevronRight, Circle, Square } from "lucide-react";
 import { createSession, setSessionKeys, generateCharacter as apiGenerateCharacter, battleTurn as apiBattleTurn, waitForBackend, API_BASE, ApiError, getMemory, getAuthority, setAuthority as apiSetAuthority } from "./api.js";
 import { createFighter, resetFighterCombatState, computeSpawnPositions, ARENA_WIDTH, GROUND_Y } from "./lib/battleState.js";
-import { generatePhysicsProfile } from "./lib/physicsProfile.js";
-import { calculateImpact } from "./lib/impactSystem.js";
-import { resolveAllOverlaps } from "./lib/collisionSystem.js";
 import { resolveAction, tickStatus } from "./lib/battleEngine.js";
 import { interpretAction } from "./lib/actionInterpreter.js";
 import { createAnimState, queueAction, updateAnimation, applyHitReaction, triggerKnockdown, triggerTransformation, registerTurnOutcome, hitStaggerDegrees } from "./lib/animationController.js";
@@ -41,21 +38,6 @@ const PROVIDERS = [
   { id: "deepseek", label: "DeepSeek", defaultModel: "deepseek-chat" },
   { id: "openrouter", label: "OpenRouter", defaultModel: "meta-llama/llama-3.1-8b-instruct" },
 ];
-
-function ensurePhysicsProfile(fighter){
-  try{
-    const cp = fighter.combatProfile || { combatTier: 'Peak Human', strength:4, durability:4, speed:4, mobility:4, combatSkill:4, flight:false };
-    const char = fighter.character || { name: fighter.name, combatStyle: fighter.combatStyle, weapon: fighter.weapon, aura: fighter.aura };
-    const profile = generatePhysicsProfile(cp, char);
-    fighter.physicsProfile = profile;
-    return profile;
-  }catch(e){
-    console.warn('physics profile gen failed', e);
-    return null;
-  }
-}
-
-
 
 const MOTION_BOUNDS = { minX: 40, maxX: ARENA_WIDTH - 40 };
 // Phase 4B, spec section 4 ("Particle Trail"). Maps each projectile
@@ -482,62 +464,10 @@ export default function App() {
       const powerTier = PHYSICS_TIERS[impact.power?.tier] || PHYSICS_TIERS.medium;
       const dmgTier = impactTierFor(impact.damage);
       const combinedKnockback = dmgTier.mult * powerTier.knockback;
-      // M1: calculate real physics impact for correct fall direction (back fall fix)
-      let physImpact = null;
-      try{
-        const isDown = targetAnim.knockdownPhase === 'down' || targetAnim.isSliding;
-        physImpact = calculateImpact({
-          attackerPos: { x: actorAnim.motion.x, y: actorAnim.motion.y },
-          defenderPos: { x: targetAnim.motion.x, y: targetAnim.motion.y },
-          attackerMotion: actorAnim.motion,
-          defenderMotion: targetAnim.motion,
-          attackerProfile: actorAnim.physicsProfile || actorAnim.motion?.physicsProfile || { mass:75, density:1, weightClass:'Medium', derivedFrom:{strength:4}, weightDef:{}, collisionBehaviour:{}, flightPhysics:{} },
-          defenderProfile: targetAnim.physicsProfile || targetAnim.motion?.physicsProfile || { mass:75, density:1, weightClass:'Medium', knockbackResistance:75, weightDef:{}, collisionBehaviour:{groundFriction:0.6}, flightPhysics:{} },
-          damage: impact.damage,
-          attackSpeed: impact.power?.tier==='massive'?420:300,
-          isDown,
-        });
-      }catch(e){ console.warn('impact calc failed', e); }
-
-      // Bug4: down opponent = slide, no pop-up
-      const isDownNow = targetAnim.knockdownPhase === 'down' || targetAnim.isSliding;
-      if (isDownNow && physImpact) {
-        // slide instead of knockdown
-        applyHitReaction(targetAnim, impact.damage, actorAnim, physImpact);
-      } else if (dmgTier.falls) {
-        if (physImpact) {
-          triggerKnockdown(targetAnim, impact.damage, actorAnim, physImpact);
-        } else {
-          triggerKnockdown(targetAnim, actorAnim.motion.x, impact.damage, combinedKnockback);
-        }
+      if (dmgTier.falls) {
+        triggerKnockdown(targetAnim, actorAnim.motion.x, impact.damage, combinedKnockback);
       } else {
-        if (physImpact) {
-          applyHitReaction(targetAnim, impact.damage, actorAnim, physImpact);
-        } else {
-          applyHitReaction(targetAnim, actorAnim.motion.x, impact.damage, combinedKnockback);
-        }
-      }
-
-      // M1 Juice: extra hitstop based on real force, debris
-      if (physImpact) {
-        // extra hitstop
-        hitstopRef.current = Math.max(hitstopRef.current, (physImpact.hitstop||0)/1000);
-        // debris/dust
-        if (physImpact.debrisCount>0) {
-          try{
-            emitParticles(particleSystemRef.current, "debris", targetAnim.motion.x, targetAnim.motion.groundY, { count: physImpact.debrisCount });
-            emitParticles(particleSystemRef.current, "dust", targetAnim.motion.x, targetAnim.motion.groundY, { intensity: physImpact.dustAmount>0.5?"high":"low" });
-          }catch(e){}
-        }
-        // separation fix Bug2
-        try{
-          const allAnimsList = Object.values(animRef.current).filter(Boolean);
-          if (allAnimsList.length>1) {
-            const fightersForSep = allAnimsList.map(a=>({ x:a.motion.x, y:a.motion.y, motion:a.motion, physicsProfile:a.physicsProfile||a.motion?.physicsProfile }));
-            resolveAllOverlaps(fightersForSep, 52);
-            allAnimsList.forEach((a,i)=>{ a.motion.x = fightersForSep[i].x; });
-          }
-        }catch(e){}
+        applyHitReaction(targetAnim, actorAnim.motion.x, impact.damage, combinedKnockback);
       }
       if (dmgTier.camera) triggerCameraEvent(cameraRef.current, dmgTier.camera);
       triggerHitstop(impact.damage, impact.result === "lethal");
@@ -981,6 +911,15 @@ export default function App() {
     // fresh or picked up from `pending` after resolving in the background.
     function fetchDecision(fighter, opponent, round) {
       const recentTurns = logRef.current.filter((l) => !l.system).slice(-10);
+      // M2: Include live positions so AI knows where opponent is (teleport etc)
+      const attackerAnim = animRef.current[fighter.key];
+      const defenderAnim = animRef.current[opponent.key];
+      const positions = {
+        self: { x: attackerAnim?.motion?.x ?? fighter.position?.x ?? 0, y: attackerAnim?.motion?.y ?? 0, facing: attackerAnim?.motion?.facing ?? 1, vx: attackerAnim?.motion?.vx ?? 0, vy: attackerAnim?.motion?.vy ?? 0, isTeleporting: attackerAnim?.motion?.mode?.includes('teleport') || false, isSliding: attackerAnim?.isSliding || false, knockdownPhase: attackerAnim?.knockdownPhase || null },
+        enemy: { x: defenderAnim?.motion?.x ?? opponent.position?.x ?? 0, y: defenderAnim?.motion?.y ?? 0, facing: defenderAnim?.motion?.facing ?? -1, vx: defenderAnim?.motion?.vx ?? 0, vy: defenderAnim?.motion?.vy ?? 0, isTeleporting: defenderAnim?.motion?.mode?.includes('teleport') || false, isSliding: defenderAnim?.isSliding || false, knockdownPhase: defenderAnim?.knockdownPhase || null },
+        distance: Math.abs((attackerAnim?.motion?.x ?? 0) - (defenderAnim?.motion?.x ?? 0)),
+        side: (defenderAnim?.motion?.x ?? 0) > (attackerAnim?.motion?.x ?? 0) ? 'right' : 'left',
+      };
       return apiBattleTurn(
         sessionId,
         fighter.key,
@@ -988,7 +927,8 @@ export default function App() {
         { name: fighter.name, hp: fighter.hp, energy: fighter.energy, status: fighter.status.map((s) => s.type), combatStyle: fighter.combatStyle, personality: fighter.personality, weapon: fighter.weapon, aura: fighter.aura },
         { name: opponent.name, hp: opponent.hp, energy: opponent.energy, status: opponent.status.map((s) => s.type) },
         recentTurns,
-        fighter.customPrompt
+        fighter.customPrompt,
+        positions
       )
         .then((result) => ({ ok: true, result }))
         .catch((error) => ({ ok: false, error }));

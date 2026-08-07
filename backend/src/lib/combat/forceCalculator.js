@@ -1,0 +1,32 @@
+import { getMaterialResistance } from "./materialSystem.js";
+import { generateBackendPhysicsProfile } from "./physicsProfile.js";
+export function calculateForce({ attackerProfile, defenderProfile, ability, distance, velocity, positions }) {
+  const attPhys = generateBackendPhysicsProfile(attackerProfile);
+  const defPhys = generateBackendPhysicsProfile(defenderProfile);
+  const strength = attackerProfile?.strength ?? 4;
+  const speed = attackerProfile?.speed ?? 4;
+  const combatSkill = attackerProfile?.combatSkill ?? 4;
+  const attackerVelocity = velocity || (speed * 15 + 50);
+  const momentum = attPhys.mass * attackerVelocity * 0.01;
+  const selfX = positions?.self?.x || 0;
+  const enemyX = positions?.enemy?.x || 100;
+  const rawDx = enemyX - selfX;
+  const dist = Math.abs(rawDx) || 1;
+  const impactVector = { x: rawDx/dist, y: 0 };
+  const defenderFacing = positions?.enemy?.facing || -1;
+  const isBackAttack = Math.sign(defenderFacing) === Math.sign(rawDx);
+  const targetResistance = defPhys.knockbackResistance || 75;
+  const materialRes = getMaterialResistance('concrete', momentum*10);
+  const tierMultiplier = { Human:0.5,'Peak Human':0.7,Superhuman:1.0,Building:1.4,City:2.0,Mountain:3.0,Country:5,Planet:10,Star:20,Galaxy:40,Universal:80,Multiversal:150,Conceptual:300,Narrative:500,Author:1000 };
+  const tier = attackerProfile?.combatTier || 'Peak Human';
+  const tierMult = tierMultiplier[tier] || 1.0;
+  const baseForce = strength * 8 * tierMult + speed * 3 + momentum * 0.5;
+  const skillBonus = combatSkill * 0.1 + 0.5;
+  let force = baseForce * skillBonus;
+  if (distance?.value > 260 && !ability?.isProjectile) force *= 0.3;
+  const resistanceFactor = 75 / Math.max(10, targetResistance);
+  const energyTransfer = force * resistanceFactor * Math.max(0.3, 1 - materialRes.resistance*0.001);
+  const remainingMomentum = Math.max(0, momentum - energyTransfer*0.1);
+  const damage = Math.max(1, Math.round(energyTransfer * 0.15));
+  return { force, momentum, impactVector, targetResistance, materialResistance: materialRes.resistance, remainingMomentum, energyTransfer, damage, attackerPhysics: attPhys, defenderPhysics: defPhys, tierMultiplier: tierMult, side: rawDx>0?'right':'left', distance: dist, isBackAttack, willHit: distance?.value <= 900 };
+}
